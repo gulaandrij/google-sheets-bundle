@@ -4,12 +4,18 @@ declare(strict_types=1);
 
 namespace Gulaandrij\GoogleSheetsBundle\Tests;
 
+use Google\Client as GoogleClient;
+use Google\Service\Sheets as GoogleSheets;
 use Gulaandrij\GoogleSheetsBundle\Exception\MissingCredentialsException;
 use Gulaandrij\GoogleSheetsBundle\GoogleSheetsBundle;
+use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
+use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
 use Gulaandrij\GoogleSheetsBundle\Tests\Fixtures\TestKernel;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Revolution\Google\Sheets\SheetsClient;
 
 /**
  * @internal
@@ -28,6 +34,7 @@ final class GoogleSheetsBundleTest extends TestCase
         ]);
 
         self::assertTrue($kernel->getContainer()->has(SheetsService::class));
+        self::assertTrue($kernel->getContainer()->has(SheetsClientFactory::class));
     }
 
     public function testInstantiatingTheServiceWithoutCredentialsThrows(): void
@@ -45,13 +52,81 @@ final class GoogleSheetsBundleTest extends TestCase
             'scopes' => ['https://example.com/custom-scope'],
         ]);
 
-        $service = $kernel->getContainer()->get(SheetsService::class);
-        self::assertInstanceOf(SheetsService::class, $service);
+        $client = $kernel->getContainer()->get(GoogleClient::class);
+        self::assertInstanceOf(GoogleClient::class, $client);
 
-        $googleService = $service->client()->getService();
-        $googleClient = $googleService->getClient();
+        self::assertSame(['https://example.com/custom-scope'], $client->getScopes());
+    }
 
-        self::assertSame(['https://example.com/custom-scope'], $googleClient->getScopes());
+    public function testDefaultScopesAreReadOnly(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+        ]);
+
+        $client = $kernel->getContainer()->get(GoogleClient::class);
+        self::assertInstanceOf(GoogleClient::class, $client);
+
+        self::assertSame([
+            GoogleSheets::SPREADSHEETS_READONLY,
+            GoogleSheets::DRIVE_READONLY,
+        ], $client->getScopes());
+    }
+
+    public function testApplicationNameAndOAuthCredentialsAreForwarded(): void
+    {
+        $kernel = $this->bootKernel([
+            'application_name' => 'My App',
+            'auth' => [
+                'client_id' => 'cid',
+                'client_secret' => 'csecret',
+            ],
+        ]);
+
+        $client = $kernel->getContainer()->get(GoogleClient::class);
+        self::assertInstanceOf(GoogleClient::class, $client);
+
+        self::assertSame('My App', $client->getConfig('application_name'));
+        self::assertSame('cid', $client->getClientId());
+    }
+
+    public function testClientFactoryAcceptsAuthConfigAsArray(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => [
+                'auth_config' => [
+                    'type' => 'service_account',
+                    'project_id' => 'demo',
+                    'private_key_id' => 'k',
+                    'private_key' => "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
+                    'client_email' => 'demo@example.iam.gserviceaccount.com',
+                    'client_id' => '123',
+                ],
+            ],
+        ]);
+
+        $factory = $kernel->getContainer()->get('google_sheets.client_factory');
+        self::assertInstanceOf(GoogleClientFactory::class, $factory);
+
+        $auth = (new ReflectionProperty($factory, 'auth'))->getValue($factory);
+
+        self::assertIsArray($auth);
+        self::assertIsArray($auth['auth_config']);
+        self::assertSame('service_account', $auth['auth_config']['type']);
+    }
+
+    public function testSheetsClientIsRegisteredAsNonShared(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+        ]);
+
+        $a = $kernel->getContainer()->get(SheetsClient::class);
+        $b = $kernel->getContainer()->get(SheetsClient::class);
+
+        self::assertInstanceOf(SheetsClient::class, $a);
+        self::assertInstanceOf(SheetsClient::class, $b);
+        self::assertNotSame($a, $b, 'sheets_client must be non-shared so stateful selectors do not leak between consumers');
     }
 
     /**

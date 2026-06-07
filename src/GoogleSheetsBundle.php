@@ -7,6 +7,7 @@ namespace Gulaandrij\GoogleSheetsBundle;
 use Google\Client as GoogleClient;
 use Google\Service\Sheets as GoogleSheets;
 use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
+use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
 use Revolution\Google\Sheets\SheetsClient;
 use Symfony\Component\Config\Definition\Configurator\DefinitionConfigurator;
@@ -44,9 +45,13 @@ final class GoogleSheetsBundle extends AbstractBundle
                             ->defaultNull()
                             ->info('OAuth client secret, used together with client_id.')
                         ->end()
-                        ->scalarNode('auth_config')
+                        ->variableNode('auth_config')
                             ->defaultNull()
-                            ->info('Path to a service-account JSON file, or the JSON document itself as a string.')
+                            ->info('Path to a service-account JSON file, the JSON document itself as a string, or a decoded array.')
+                            ->validate()
+                                ->ifTrue(static fn (mixed $value): bool => null !== $value && !is_string($value) && !is_array($value))
+                                ->thenInvalid('google_sheets.auth.auth_config must be a string (path or JSON) or an array; got %s.')
+                            ->end()
                         ->end()
                     ->end()
                 ->end()
@@ -65,7 +70,7 @@ final class GoogleSheetsBundle extends AbstractBundle
     /**
      * @param array{
      *     application_name: string|null,
-     *     auth: array{api_key: string|null, client_id: string|null, client_secret: string|null, auth_config: string|null},
+     *     auth: array{api_key: string|null, client_id: string|null, client_secret: string|null, auth_config: string|array<string, mixed>|null},
      *     scopes: list<string>,
      * } $config
      */
@@ -93,17 +98,27 @@ final class GoogleSheetsBundle extends AbstractBundle
         ;
 
         $services
+            ->set('google_sheets.sheets_client_factory', SheetsClientFactory::class)
+            ->args([service('google_sheets.google_service')])
+        ;
+
+        // Each request for the SheetsClient gets a brand-new instance so the
+        // stateful selectors (range, majorDimension, valueRenderOption,
+        // dateTimeRenderOption) cannot leak between consumers.
+        $services
             ->set('google_sheets.sheets_client', SheetsClient::class)
-            ->call('setService', [service('google_sheets.google_service')])
+            ->factory([service('google_sheets.sheets_client_factory'), 'create'])
+            ->share(false)
         ;
 
         $services
             ->set('google_sheets.sheets_service', SheetsService::class)
-            ->args([service('google_sheets.sheets_client')])
+            ->args([service('google_sheets.sheets_client_factory')])
             ->public()
         ;
 
         $services->alias(SheetsService::class, 'google_sheets.sheets_service')->public();
+        $services->alias(SheetsClientFactory::class, 'google_sheets.sheets_client_factory');
         $services->alias(SheetsClient::class, 'google_sheets.sheets_client');
         $services->alias(GoogleClient::class, 'google_sheets.google_client');
         $services->alias(GoogleSheets::class, 'google_sheets.google_service');

@@ -19,7 +19,7 @@ use Gulaandrij\GoogleSheetsBundle\Exception\MissingCredentialsException;
  *     api_key: string|null,
  *     client_id: string|null,
  *     client_secret: string|null,
- *     auth_config: string|null,
+ *     auth_config: string|array<string, mixed>|null,
  * }
  */
 final class GoogleClientFactory
@@ -38,9 +38,13 @@ final class GoogleClientFactory
 
     public function __invoke(): GoogleClient
     {
+        $authConfig = $this->auth['auth_config'];
+        $hasAuthConfig = (is_string($authConfig) && '' !== $authConfig)
+            || (is_array($authConfig) && [] !== $authConfig);
+
         $hasAnyCredential = (null !== $this->auth['api_key'] && '' !== $this->auth['api_key'])
             || (null !== $this->auth['client_id'] && '' !== $this->auth['client_id'])
-            || (null !== $this->auth['auth_config'] && '' !== $this->auth['auth_config']);
+            || $hasAuthConfig;
 
         if (!$hasAnyCredential) {
             throw MissingCredentialsException::create();
@@ -66,8 +70,8 @@ final class GoogleClientFactory
             $client->setClientSecret($this->auth['client_secret']);
         }
 
-        if (null !== $this->auth['auth_config'] && '' !== $this->auth['auth_config']) {
-            $client->setAuthConfig($this->auth['auth_config']);
+        if ($hasAuthConfig) {
+            $client->setAuthConfig($authConfig);
         }
 
         if ([] !== $this->scopes) {

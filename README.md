@@ -91,6 +91,7 @@ final class AllocatorReport
 SheetsService::readRaw(string $spreadsheetId, string $sheetName, ?string $range = null): array
 SheetsService::readAssoc(string $spreadsheetId, string $sheetName, ?string $range = null): array
 SheetsService::listSheets(string $spreadsheetId): array
+SheetsService::listSheetsWithIds(string $spreadsheetId): array
 SheetsService::append(string $spreadsheetId, string $sheetName, array $rows, string $valueInputOption = 'RAW', string $insertDataOption = 'OVERWRITE'): AppendValuesResponse
 SheetsService::update(string $spreadsheetId, string $sheetName, string $range, array $values, string $valueInputOption = 'RAW'): BatchUpdateValuesResponse
 SheetsService::clear(string $spreadsheetId, string $sheetName, ?string $range = null): ?ClearValuesResponse
@@ -98,10 +99,15 @@ SheetsService::client(): SheetsClient
 ```
 
 - `readRaw` returns each row as a positional array (`list<list<mixed>>`).
-- `readAssoc` treats the first row as the header and yields associative rows. Short rows are padded with empty strings; overflow cells beyond the header are discarded.
-- `append` accepts either positional rows (`list<list<mixed>>`) or associative rows (`list<array<string,mixed>>`); associative rows are reordered to match the sheet header by the underlying client.
+- `readAssoc` treats the first row as the header and yields associative rows. Short rows are padded with empty strings; overflow cells beyond the header are discarded. Duplicate header values throw `DuplicateHeaderException`; non-scalar header cells throw `InvalidHeaderException` — fall back to `readRaw` for non-conforming sheets.
+- `listSheets` returns just the tab titles in a list; `listSheetsWithIds` returns the `sheetId => title` map for callers that need the stable IDs (e.g. for `sheetById()` lookups).
+- `append` accepts either positional rows (`list<list<mixed>>`) or associative rows (`list<array<string,mixed>>`); rows must be uniform — mixing shapes throws `MixedRowShapeException` to prevent the underlying client from silently dropping data.
 - `update` and `clear` target a specific A1-notation range; pass `null` to `clear` to wipe the whole sheet.
-- `client()` returns the underlying `Revolution\Google\Sheets\SheetsClient` for advanced operations not covered above (batch operations, properties, drive metadata, etc.).
+- `client()` returns a **fresh** `Revolution\Google\Sheets\SheetsClient` for advanced operations not covered above (batch operations, properties, drive metadata, etc.). Because every call constructs a new instance, mutating selectors like `valueRenderOption()` on the returned client never leaks into other callers.
+
+### State isolation
+
+The underlying `Revolution\Google\Sheets\SheetsClient` keeps `range`, `majorDimension`, `valueRenderOption`, and `dateTimeRenderOption` as instance fields — and neither `spreadsheet()` nor `sheet()` reset them. To prevent cross-call leakage, this bundle wires the `SheetsClient` service as **non-shared**: each `SheetsService` method (and each `client()` call) gets a brand-new instance via `SheetsClientFactory::create()`. If you autowire `SheetsClient` directly into your own services, every constructor injection still gets its own instance; if you fetch it from the container at runtime, each `get()` returns a new one.
 
 ### Direct access to lower-level services
 

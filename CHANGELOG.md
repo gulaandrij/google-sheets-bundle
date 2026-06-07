@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+- `SheetsClientFactory` service registered as `google_sheets.sheets_client_factory` (autowire alias). `SheetsService` now obtains a fresh `SheetsClient` per call.
+- `SheetsService::listSheetsWithIds()` — returns the `sheetId => title` map (the existing `listSheets()` still returns just the names).
+- `DuplicateHeaderException`, `InvalidHeaderException`, `MixedRowShapeException` — explicit failure modes for the previously-silent corner cases.
+- `auth_config` config node now accepts arrays in addition to strings.
+
+### Fixed
+- Singleton `SheetsClient` was leaking `range` / `majorDimension` / `valueRenderOption` / `dateTimeRenderOption` between callers because `spreadsheet()` and `sheet()` never reset them. `google_sheets.sheets_client` is now non-shared and `SheetsService` constructs a fresh client per call.
+- `SheetsService::client()` now returns a fresh client per call so escape-hatch consumers cannot pollute shared state.
+- `readAssoc()` no longer silently collapses duplicate header columns (throws `DuplicateHeaderException`) and no longer warns on non-scalar header cells (throws `InvalidHeaderException`).
+- `append()` rejects mixed positional/associative rows (`MixedRowShapeException`) instead of letting the underlying client drop data for the non-conforming rows.
+
+### Changed
+- `phpunit/phpunit` constraint tightened to `^12.0` (test code uses `AllowMockObjectsWithoutExpectations`, a PHPUnit 12 attribute).
+
 ## [0.1.0]
 
 ### Added

@@ -7,16 +7,21 @@ namespace Gulaandrij\GoogleSheetsBundle\Service;
 use Google\Service\Sheets\AppendValuesResponse;
 use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
+use Gulaandrij\GoogleSheetsBundle\Exception\DuplicateHeaderException;
+use Gulaandrij\GoogleSheetsBundle\Exception\InvalidHeaderException;
+use Gulaandrij\GoogleSheetsBundle\Exception\MixedRowShapeException;
 use Revolution\Google\Sheets\SheetsClient;
 
 /**
  * High-level wrapper around `SheetsClient` with method calls that select the
  * target spreadsheet and tab upfront. Each public method runs against a fresh
- * selection so callers cannot accidentally leak state between calls.
+ * `SheetsClient` instance built by the factory, so stateful selectors
+ * (range, majorDimension, valueRenderOption, dateTimeRenderOption) never leak
+ * between calls.
  */
 final class SheetsService
 {
-    public function __construct(private readonly SheetsClient $client)
+    public function __construct(private readonly SheetsClientFactory $factory)
     {
     }
 
@@ -27,7 +32,7 @@ final class SheetsService
      */
     public function readRaw(string $spreadsheetId, string $sheetName, ?string $range = null): array
     {
-        $selection = $this->client
+        $selection = $this->factory->create()
             ->spreadsheet($spreadsheetId)
             ->sheet($sheetName);
 
@@ -46,6 +51,9 @@ final class SheetsService
      * associative arrays keyed by the header values.
      *
      * @return list<array<string, mixed>>
+     *
+     * @throws DuplicateHeaderException when the first row contains a duplicate cell value
+     * @throws InvalidHeaderException   when a header cell is not a scalar/null
      */
     public function readAssoc(string $spreadsheetId, string $sheetName, ?string $range = null): array
     {
@@ -55,8 +63,7 @@ final class SheetsService
             return [];
         }
 
-        /** @var list<string> $header */
-        $header = array_map(static fn (mixed $cell): string => (string) $cell, array_shift($rows));
+        $header = $this->normaliseHeader(array_shift($rows));
 
         if ([] === $header) {
             return [];
@@ -66,7 +73,6 @@ final class SheetsService
         $result = [];
 
         foreach ($rows as $row) {
-            /** @var list<mixed> $padded */
             $padded = array_pad(array_values($row), $count, '');
             $padded = array_slice($padded, 0, $count);
 
@@ -85,20 +91,33 @@ final class SheetsService
      */
     public function listSheets(string $spreadsheetId): array
     {
-        /** @var list<string> $names */
-        $names = $this->client->spreadsheet($spreadsheetId)->sheetList();
+        return array_values($this->listSheetsWithIds($spreadsheetId));
+    }
 
-        return array_values($names);
+    /**
+     * List all sheets in a spreadsheet as a `sheetId => title` map.
+     *
+     * @return array<int, string>
+     */
+    public function listSheetsWithIds(string $spreadsheetId): array
+    {
+        /** @var array<int, string> $map */
+        $map = $this->factory->create()->spreadsheet($spreadsheetId)->sheetList();
+
+        return $map;
     }
 
     /**
      * Append rows to the end of a sheet.
      *
-     * Rows may be positional (`list<list<mixed>>`) or associative
-     * (`list<array<string, mixed>>`); associative rows are reordered to match
-     * the sheet header by the underlying client.
+     * Rows must all share the same shape: either all positional (`list<list<mixed>>`)
+     * or all associative (`list<array<string,mixed>>`). Associative rows are
+     * reordered to match the sheet header by the underlying client; mixing
+     * shapes silently drops data, so it is rejected upfront.
      *
      * @param list<array<string, mixed>>|list<list<mixed>> $rows
+     *
+     * @throws MixedRowShapeException when $rows mixes positional and associative entries
      */
     public function append(
         string $spreadsheetId,
@@ -107,7 +126,9 @@ final class SheetsService
         string $valueInputOption = 'RAW',
         string $insertDataOption = 'OVERWRITE',
     ): AppendValuesResponse {
-        return $this->client
+        $this->assertHomogeneousRows($rows);
+
+        return $this->factory->create()
             ->spreadsheet($spreadsheetId)
             ->sheet($sheetName)
             ->append($rows, $valueInputOption, $insertDataOption);
@@ -125,7 +146,7 @@ final class SheetsService
         array $values,
         string $valueInputOption = 'RAW',
     ): BatchUpdateValuesResponse {
-        return $this->client
+        return $this->factory->create()
             ->spreadsheet($spreadsheetId)
             ->sheet($sheetName)
             ->range($range)
@@ -137,7 +158,7 @@ final class SheetsService
      */
     public function clear(string $spreadsheetId, string $sheetName, ?string $range = null): ?ClearValuesResponse
     {
-        $selection = $this->client
+        $selection = $this->factory->create()
             ->spreadsheet($spreadsheetId)
             ->sheet($sheetName);
 
@@ -149,11 +170,69 @@ final class SheetsService
     }
 
     /**
-     * Escape hatch returning the underlying `SheetsClient` for operations not
-     * covered by this service.
+     * Return a fresh `SheetsClient` for operations not covered by this service.
+     * Each call constructs a new client so callers cannot leak state into other
+     * consumers of the bundle.
      */
     public function client(): SheetsClient
     {
-        return $this->client;
+        return $this->factory->create();
+    }
+
+    /**
+     * @param list<mixed> $headerRow
+     *
+     * @return list<string>
+     */
+    private function normaliseHeader(array $headerRow): array
+    {
+        $header = [];
+
+        foreach ($headerRow as $index => $cell) {
+            if (null !== $cell && !is_scalar($cell)) {
+                throw InvalidHeaderException::nonScalarCell($index, get_debug_type($cell));
+            }
+            $header[] = (string) $cell;
+        }
+
+        $seen = [];
+        foreach ($header as $name) {
+            if (isset($seen[$name])) {
+                throw DuplicateHeaderException::forName($name);
+            }
+            $seen[$name] = true;
+        }
+
+        return $header;
+    }
+
+    /**
+     * @param list<array<string, mixed>>|list<list<mixed>> $rows
+     */
+    private function assertHomogeneousRows(array $rows): void
+    {
+        if ([] === $rows) {
+            return;
+        }
+
+        $firstIsAssoc = $this->isAssoc($rows[0]);
+
+        foreach ($rows as $index => $row) {
+            if ($this->isAssoc($row) !== $firstIsAssoc) {
+                throw MixedRowShapeException::atIndex($index, $firstIsAssoc);
+            }
+        }
+    }
+
+    /**
+     * @param array<int|string, mixed> $row
+     */
+    private function isAssoc(array $row): bool
+    {
+        if ([] === $row) {
+            return false;
+        }
+
+        return array_keys($row) !== range(0, count($row) - 1);
     }
 }
