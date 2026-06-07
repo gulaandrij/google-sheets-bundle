@@ -7,6 +7,8 @@ namespace Gulaandrij\GoogleSheetsBundle;
 use Google\Client as GoogleClient;
 use Google\Service\Drive as GoogleDrive;
 use Google\Service\Sheets as GoogleSheets;
+use Gulaandrij\GoogleSheetsBundle\Profiler\SheetsCollector;
+use Gulaandrij\GoogleSheetsBundle\Profiler\TraceableSheetsService;
 use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
@@ -188,6 +190,19 @@ final class GoogleSheetsBundle extends AbstractBundle
         $services->alias(GoogleSheets::class, 'google_sheets.google_service');
         $services->alias(GoogleDrive::class, 'google_sheets.google_drive');
 
+        $debug = (bool) $builder->getParameter('kernel.debug');
+
+        if ($debug) {
+            $services
+                ->set('google_sheets.profiler.collector', SheetsCollector::class)
+                ->tag('data_collector', [
+                    'template' => '@GoogleSheets/Collector/sheets.html.twig',
+                    'id' => 'google_sheets',
+                    'priority' => 250,
+                ])
+            ;
+        }
+
         if ([] === $spreadsheets) {
             return;
         }
@@ -195,13 +210,20 @@ final class GoogleSheetsBundle extends AbstractBundle
         foreach ($spreadsheets as $name => $entry) {
             $serviceId = 'google_sheets.sheets_service.'.$name;
 
+            $serviceClass = $debug ? TraceableSheetsService::class : SheetsService::class;
+            $args = [
+                service('google_sheets.sheets_client_factory'),
+                $entry['id'],
+                $entry['sheet'],
+            ];
+            if ($debug) {
+                $args[] = service('google_sheets.profiler.collector');
+                $args[] = $name;
+            }
+
             $services
-                ->set($serviceId, SheetsService::class)
-                ->args([
-                    service('google_sheets.sheets_client_factory'),
-                    $entry['id'],
-                    $entry['sheet'],
-                ])
+                ->set($serviceId, $serviceClass)
+                ->args($args)
                 ->public()
             ;
 

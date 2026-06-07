@@ -1,0 +1,113 @@
+{% extends '@WebProfiler/Profiler/layout.html.twig' %}
+
+{% block toolbar %}
+    {% set status_color = collector.errorCount > 0 ? 'red' : '' %}
+    {% set icon %}
+        {{ source('@WebProfiler/Icon/email.svg', ignore_missing = true) }}
+        <span class="sf-toolbar-value">{{ collector.totalCalls }}</span>
+        <span class="sf-toolbar-info-piece-additional-detail">
+            <span class="sf-toolbar-label">in</span>
+            <span class="sf-toolbar-value">{{ collector.totalDurationMs|number_format(1) }}</span>
+            <span class="sf-toolbar-label">ms</span>
+        </span>
+    {% endset %}
+
+    {% set text %}
+        <div class="sf-toolbar-info-piece">
+            <b>Google Sheets calls</b>
+            <span>{{ collector.totalCalls }}</span>
+        </div>
+        <div class="sf-toolbar-info-piece">
+            <b>Total time</b>
+            <span>{{ collector.totalDurationMs|number_format(1) }} ms</span>
+        </div>
+        {% if collector.errorCount > 0 %}
+            <div class="sf-toolbar-info-piece">
+                <b>Errors</b>
+                <span class="sf-toolbar-status sf-toolbar-status-red">{{ collector.errorCount }}</span>
+            </div>
+        {% endif %}
+    {% endset %}
+
+    {{ include('@WebProfiler/Profiler/toolbar_item.html.twig', { link: profiler_url, status: status_color }) }}
+{% endblock %}
+
+{% block menu %}
+    <span class="label {{ collector.errorCount > 0 ? 'label-status-error' : '' }} {{ collector.totalCalls == 0 ? 'disabled' : '' }}">
+        <span class="icon">{{ source('@WebProfiler/Icon/email.svg', ignore_missing = true) }}</span>
+        <strong>Google Sheets</strong>
+        {% if collector.totalCalls > 0 %}
+            <span class="count">
+                <span>{{ collector.totalCalls }}</span>
+            </span>
+        {% endif %}
+    </span>
+{% endblock %}
+
+{% block panel %}
+    <h2>Google Sheets Calls</h2>
+
+    {% if collector.totalCalls == 0 %}
+        <div class="empty">
+            <p>No Google Sheets calls recorded during this request.</p>
+        </div>
+    {% else %}
+        <div class="metrics">
+            <div class="metric">
+                <span class="value">{{ collector.totalCalls }}</span>
+                <span class="label">Total calls</span>
+            </div>
+            <div class="metric">
+                <span class="value">{{ collector.totalDurationMs|number_format(1) }} <span class="unit">ms</span></span>
+                <span class="label">Total time</span>
+            </div>
+            {% if collector.errorCount > 0 %}
+                <div class="metric">
+                    <span class="value status-error">{{ collector.errorCount }}</span>
+                    <span class="label">Errors</span>
+                </div>
+            {% endif %}
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Service</th>
+                    <th>Method</th>
+                    <th>Spreadsheet</th>
+                    <th>Sheet</th>
+                    <th>Range</th>
+                    <th class="text-right">Duration</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for i, call in collector.calls %}
+                    <tr>
+                        <td>{{ i + 1 }}</td>
+                        <td><code>{{ call.service }}</code></td>
+                        <td><code>{{ call.method }}</code></td>
+                        <td><code title="{{ call.spreadsheet_id }}">{{ call.spreadsheet_id|slice(0, 12) }}…</code></td>
+                        <td>{{ call.sheet ?: '—' }}</td>
+                        <td>{{ call.range ?: '—' }}</td>
+                        <td class="text-right">{{ call.duration_ms|number_format(1) }} ms</td>
+                        <td>
+                            {% if call.error %}
+                                <span class="label status-error" title="{{ call.error }}">error</span>
+                            {% else %}
+                                <span class="label status-success">ok</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% if call.error %}
+                        <tr>
+                            <td></td>
+                            <td colspan="7"><pre style="margin:0;color:#b94a48;">{{ call.error }}</pre></td>
+                        </tr>
+                    {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endblock %}

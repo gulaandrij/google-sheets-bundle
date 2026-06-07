@@ -34,7 +34,7 @@ use Revolution\Google\Sheets\SheetsClient;
  * For dynamic spreadsheet IDs (only known at runtime), inject
  * `SheetsClientFactory` instead and drive the client directly.
  */
-final class SheetsService
+class SheetsService
 {
     public const VALUE_RENDER_FORMATTED = 'FORMATTED_VALUE';
     public const VALUE_RENDER_UNFORMATTED = 'UNFORMATTED_VALUE';
@@ -85,6 +85,19 @@ final class SheetsService
         ?string $valueRenderOption = null,
         ?string $dateTimeRenderOption = null,
     ): array {
+        return $this->doReadRaw($sheetName, $range, $majorDimension, $valueRenderOption, $dateTimeRenderOption);
+    }
+
+    /**
+     * @return list<list<mixed>>
+     */
+    private function doReadRaw(
+        ?string $sheetName,
+        ?string $range,
+        ?string $majorDimension,
+        ?string $valueRenderOption,
+        ?string $dateTimeRenderOption,
+    ): array {
         $selection = $this->applyReadOptions(
             $this->factory->create()->spreadsheet($this->spreadsheetId)->sheet($this->resolveSheetName($sheetName)),
             $range,
@@ -115,7 +128,9 @@ final class SheetsService
         ?string $valueRenderOption = null,
         ?string $dateTimeRenderOption = null,
     ): array {
-        $rows = $this->readRaw($sheetName, $range, $majorDimension, $valueRenderOption, $dateTimeRenderOption);
+        // Call the private helper directly so a TraceableSheetsService subclass
+        // doesn't double-record (readAssoc + the inner readRaw).
+        $rows = $this->doReadRaw($sheetName, $range, $majorDimension, $valueRenderOption, $dateTimeRenderOption);
 
         if ([] === $rows) {
             return [];
@@ -270,7 +285,9 @@ final class SheetsService
      */
     public function listSheets(): array
     {
-        return array_values($this->listSheetsWithIds());
+        // Call the private helper directly so a TraceableSheetsService subclass
+        // doesn't double-record (listSheets + the inner listSheetsWithIds).
+        return array_values($this->doListSheetsWithIds());
     }
 
     /**
@@ -279,6 +296,14 @@ final class SheetsService
      * @return array<int, string>
      */
     public function listSheetsWithIds(): array
+    {
+        return $this->doListSheetsWithIds();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function doListSheetsWithIds(): array
     {
         /** @var array<int, string> $map */
         $map = $this->factory->create()->spreadsheet($this->spreadsheetId)->sheetList();
@@ -291,7 +316,9 @@ final class SheetsService
      */
     public function findSheetNameById(int $sheetId): ?string
     {
-        return $this->listSheetsWithIds()[$sheetId] ?? null;
+        // Call the private helper directly so a TraceableSheetsService subclass
+        // doesn't double-record (findSheetNameById + the inner listSheetsWithIds).
+        return $this->doListSheetsWithIds()[$sheetId] ?? null;
     }
 
     // ------------------------------------------------------------------

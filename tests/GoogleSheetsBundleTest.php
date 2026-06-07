@@ -9,6 +9,8 @@ use Google\Service\Drive as GoogleDrive;
 use Google\Service\Sheets as GoogleSheets;
 use Gulaandrij\GoogleSheetsBundle\Exception\MissingCredentialsException;
 use Gulaandrij\GoogleSheetsBundle\GoogleSheetsBundle;
+use Gulaandrij\GoogleSheetsBundle\Profiler\SheetsCollector;
+use Gulaandrij\GoogleSheetsBundle\Profiler\TraceableSheetsService;
 use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
@@ -325,13 +327,56 @@ final class GoogleSheetsBundleTest extends TestCase
         self::assertNotSame($a, $b);
     }
 
+    public function testDebugModeWrapsSheetsServiceWithTraceableSubclassAndRegistersCollector(): void
+    {
+        $kernel = $this->bootKernel(
+            [
+                'auth' => ['api_key' => 'test-key'],
+                'spreadsheets' => [
+                    'allocators' => ['id' => '1abc', 'sheet' => 'List'],
+                ],
+            ],
+            debug: true,
+        );
+
+        $container = $kernel->getContainer();
+
+        self::assertTrue($container->has('google_sheets.profiler.collector'));
+        $collector = $container->get('google_sheets.profiler.collector');
+        self::assertInstanceOf(SheetsCollector::class, $collector);
+
+        $service = $container->get(SheetsService::class);
+        self::assertInstanceOf(TraceableSheetsService::class, $service);
+    }
+
+    public function testProdModeUsesPlainSheetsServiceAndSkipsCollector(): void
+    {
+        $kernel = $this->bootKernel(
+            [
+                'auth' => ['api_key' => 'test-key'],
+                'spreadsheets' => [
+                    'allocators' => ['id' => '1abc', 'sheet' => 'List'],
+                ],
+            ],
+            debug: false,
+        );
+
+        $container = $kernel->getContainer();
+
+        self::assertFalse($container->has('google_sheets.profiler.collector'));
+
+        $service = $container->get(SheetsService::class);
+        self::assertInstanceOf(SheetsService::class, $service);
+        self::assertNotInstanceOf(TraceableSheetsService::class, $service);
+    }
+
     /**
      * @param array<string, mixed> $bundleConfig
      */
-    private function bootKernel(array $bundleConfig): TestKernel
+    private function bootKernel(array $bundleConfig, bool $debug = true): TestKernel
     {
         ++self::$counter;
-        $kernel = new TestKernel($bundleConfig, 'tk-'.self::$counter);
+        $kernel = new TestKernel($bundleConfig, 'tk-'.self::$counter, $debug);
         $kernel->boot();
         $this->kernel = $kernel;
 

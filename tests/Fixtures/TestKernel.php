@@ -19,8 +19,9 @@ final class TestKernel extends Kernel implements CompilerPassInterface
     public function __construct(
         private readonly array $bundleConfig = [],
         private readonly string $cacheNamespace = 'default',
+        bool $debug = true,
     ) {
-        parent::__construct('test', true);
+        parent::__construct('test', $debug);
     }
 
     public function registerBundles(): iterable

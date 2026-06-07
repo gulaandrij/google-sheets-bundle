@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-06-07
+
+### Added
+- **Symfony Web Profiler integration**. When `kernel.debug` is true the bundle registers `google_sheets.profiler.collector` (a `SheetsCollector` extending `AbstractDataCollector`) and wraps every named `SheetsService` with `TraceableSheetsService` — a subclass that records each call (`method`, bound spreadsheet ID, sheet name, range, duration in ms, optional error) into the collector. A toolbar item shows the total call count + total time; clicking it opens a panel listing every call with status badges. The collector and the traceable wrapper are skipped in production (`kernel.debug = false`).
+- `SheetsService::getBoundSheet()` is now used by the trace decorator to record the resolved sheet name when an explicit `$sheetName` is omitted.
+
+### Changed
+- `SheetsService` is no longer `final` so the bundle's own `TraceableSheetsService` (and downstream consumers) can extend it.
+- Internal callers of `readRaw` from `readAssoc`, and of `listSheetsWithIds` from `listSheets` / `findSheetNameById`, now go through private `doReadRaw` / `doListSheetsWithIds` helpers so traceable subclasses record exactly once per public call (instead of once for the outer call plus once for the inner delegation).
+
 ## [1.0.0] — 2026-06-07
 
 First stable release. Locks the public API; any further breaking change will bump the major version.
@@ -41,6 +51,7 @@ First stable release. Locks the public API; any further breaking change will bum
 - Autowire-friendly aliases for `SheetsService`, `SheetsClient`, `Google\Service\Sheets`, and `Google\Client`.
 - PHPUnit, PHPStan (level 8), PHP-CS-Fixer, and GitHub Actions CI matrix (PHP 8.3/8.4 × Symfony 6.4/7.x).
 
-[Unreleased]: https://github.com/gulaandrij/google-sheets-bundle/compare/1.0.0...HEAD
+[Unreleased]: https://github.com/gulaandrij/google-sheets-bundle/compare/1.1.0...HEAD
+[1.1.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.1.0
 [1.0.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.0.0
 [0.1.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/0.1.0

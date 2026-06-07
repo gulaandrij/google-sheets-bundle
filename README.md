@@ -217,6 +217,12 @@ Each layer is registered both under a typed alias and an explicit service ID:
 
 All five are autowireable by class name. `SheetsService` is additionally autowireable by variable name as described above.
 
+## Web Profiler
+
+When `kernel.debug` is true (typically the `dev` environment), the bundle automatically wraps every named `SheetsService` with a tracing decorator and registers a Symfony Web Profiler data collector. A "Google Sheets" toolbar item shows the total call count and total time spent in Sheets calls; clicking it opens a panel listing each call (service binding, method, spreadsheet ID, sheet, range, duration, status).
+
+There is nothing to configure — install the bundle, enable the profiler in your dev config, and the panel appears. In production (`kernel.debug = false`) the decorator and collector are skipped so there is zero overhead.
+
 ## Testing
 
 The package ships with PHPUnit, PHPStan (level 8), and PHP-CS-Fixer configured. Run:
