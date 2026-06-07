@@ -9,6 +9,7 @@ use Google\Service\Sheets as GoogleSheets;
 use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
+use LogicException;
 use Revolution\Google\Sheets\SheetsClient;
 use Symfony\Component\Config\Definition\Configurator\DefinitionConfigurator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
@@ -68,22 +69,20 @@ final class GoogleSheetsBundle extends AbstractBundle
     }
 
     /**
-     * @param array{
-     *     application_name: string|null,
-     *     auth: array{api_key: string|null, client_id: string|null, client_secret: string|null, auth_config: string|array<string, mixed>|null},
-     *     scopes: list<string>,
-     * } $config
+     * @param array<int|string, mixed> $config
      */
     public function loadExtension(array $config, ContainerConfigurator $container, ContainerBuilder $builder): void
     {
+        [$auth, $scopes, $applicationName] = $this->extractFactoryArgs($config);
+
         $services = $container->services();
 
         $services
             ->set('google_sheets.client_factory', GoogleClientFactory::class)
             ->args([
-                $config['auth'],
-                $config['scopes'],
-                $config['application_name'],
+                $auth,
+                $scopes,
+                $applicationName,
             ])
         ;
 
@@ -122,5 +121,73 @@ final class GoogleSheetsBundle extends AbstractBundle
         $services->alias(SheetsClient::class, 'google_sheets.sheets_client');
         $services->alias(GoogleClient::class, 'google_sheets.google_client');
         $services->alias(GoogleSheets::class, 'google_sheets.google_service');
+    }
+
+    /**
+     * Validate the resolved config and return the three factory args in the
+     * order GoogleClientFactory expects them. Runtime validation here lets us
+     * keep loadExtension's signature exactly contravariant with the parent
+     * while still passing precisely-typed values into the container.
+     *
+     * @param array<int|string, mixed> $config
+     *
+     * @return array{
+     *     0: array{api_key: string|null, client_id: string|null, client_secret: string|null, auth_config: string|array<string, mixed>|null},
+     *     1: list<string>,
+     *     2: string|null,
+     * }
+     */
+    private function extractFactoryArgs(array $config): array
+    {
+        $auth = $config['auth'] ?? null;
+        if (!is_array($auth)) {
+            throw new LogicException('google_sheets.auth must resolve to an array — config tree should guarantee this.');
+        }
+
+        $apiKey = $this->stringOrNull($auth['api_key'] ?? null);
+        $clientId = $this->stringOrNull($auth['client_id'] ?? null);
+        $clientSecret = $this->stringOrNull($auth['client_secret'] ?? null);
+
+        $authConfig = $auth['auth_config'] ?? null;
+        if (null !== $authConfig && !is_string($authConfig) && !is_array($authConfig)) {
+            throw new LogicException('google_sheets.auth.auth_config must be string|array|null — config tree should guarantee this.');
+        }
+        /** @var string|array<string, mixed>|null $authConfig */
+        $scopes = $config['scopes'] ?? [];
+        if (!is_array($scopes)) {
+            throw new LogicException('google_sheets.scopes must be a list of strings — config tree should guarantee this.');
+        }
+        $scopeList = [];
+        foreach ($scopes as $scope) {
+            if (!is_string($scope)) {
+                throw new LogicException('google_sheets.scopes entries must be strings.');
+            }
+            $scopeList[] = $scope;
+        }
+
+        $applicationName = $this->stringOrNull($config['application_name'] ?? null);
+
+        return [
+            [
+                'api_key' => $apiKey,
+                'client_id' => $clientId,
+                'client_secret' => $clientSecret,
+                'auth_config' => $authConfig,
+            ],
+            $scopeList,
+            $applicationName,
+        ];
+    }
+
+    private function stringOrNull(mixed $value): ?string
+    {
+        if (null === $value) {
+            return null;
+        }
+        if (!is_string($value)) {
+            throw new LogicException(sprintf('Expected string or null, got %s.', get_debug_type($value)));
+        }
+
+        return $value;
     }
 }

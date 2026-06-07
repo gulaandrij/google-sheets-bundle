@@ -163,7 +163,12 @@ final class GoogleSheetsBundleTest extends TestCase
             return;
         }
 
-        foreach (scandir($path) ?: [] as $entry) {
+        $entries = scandir($path);
+        if (false === $entries) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
             if ('.' === $entry || '..' === $entry) {
                 continue;
             }

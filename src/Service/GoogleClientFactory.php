@@ -25,8 +25,9 @@ use Gulaandrij\GoogleSheetsBundle\Exception\MissingCredentialsException;
 final class GoogleClientFactory
 {
     /**
-     * @param AuthConfig   $auth
-     * @param list<string> $scopes
+     * @param AuthConfig                     $auth
+     * @param list<string>                   $scopes
+     * @param (Closure(): GoogleClient)|null $clientBuilder
      */
     public function __construct(
         private readonly array $auth,
