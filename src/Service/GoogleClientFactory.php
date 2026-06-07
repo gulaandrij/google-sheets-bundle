@@ -7,6 +7,7 @@ namespace Gulaandrij\GoogleSheetsBundle\Service;
 use Closure;
 use Google\Client as GoogleClient;
 use Gulaandrij\GoogleSheetsBundle\Exception\MissingCredentialsException;
+use LogicException;
 
 /**
  * Builds a configured `Google\Client` from bundle configuration.
@@ -25,9 +26,8 @@ use Gulaandrij\GoogleSheetsBundle\Exception\MissingCredentialsException;
 final class GoogleClientFactory
 {
     /**
-     * @param AuthConfig                     $auth
-     * @param list<string>                   $scopes
-     * @param (Closure(): GoogleClient)|null $clientBuilder
+     * @param AuthConfig   $auth
+     * @param list<string> $scopes
      */
     public function __construct(
         private readonly array $auth,
@@ -48,12 +48,10 @@ final class GoogleClientFactory
             || $hasAuthConfig;
 
         if (!$hasAnyCredential) {
-            throw MissingCredentialsException::create();
+            throw new MissingCredentialsException(MissingCredentialsException::DEFAULT_MESSAGE);
         }
 
-        $client = null !== $this->clientBuilder
-            ? ($this->clientBuilder)()
-            : new GoogleClient();
+        $client = $this->buildClient();
 
         if (null !== $this->applicationName && '' !== $this->applicationName) {
             $client->setApplicationName($this->applicationName);
@@ -80,5 +78,19 @@ final class GoogleClientFactory
         }
 
         return $client;
+    }
+
+    private function buildClient(): GoogleClient
+    {
+        if (null === $this->clientBuilder) {
+            return new GoogleClient();
+        }
+
+        $result = ($this->clientBuilder)();
+        if (!$result instanceof GoogleClient) {
+            throw new LogicException(sprintf('GoogleClientFactory $clientBuilder must return a %s instance.', GoogleClient::class));
+        }
+
+        return $result;
     }
 }
