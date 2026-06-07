@@ -4,6 +4,16 @@ A Symfony bundle wrapping [`revolution/laravel-google-sheets`](https://github.co
 
 The bundle exists because v7 of `revolution/laravel-google-sheets` turned the convenient `Sheets` class into a Laravel facade that requires the Laravel container to resolve. This bundle pins the underlying `SheetsClient` into the Symfony DI graph and adds a higher-level `SheetsService` on top so application code does not need to chain the fluent API or worry about thread-local state.
 
+## Documentation
+
+- [Authentication](docs/authentication.md) — picking and configuring API key, OAuth, or service account credentials.
+- [Recipes](docs/recipes.md) — common patterns: imports, exports, scheduled jobs, bulk updates, formulas.
+- [Architecture](docs/architecture.md) — service graph, why per-call `SheetsClient` instances, design decisions.
+- [Troubleshooting](docs/troubleshooting.md) — common errors and what to do about them.
+- [Upgrade guide](UPGRADE.md) — moving between bundle versions.
+- [Changelog](CHANGELOG.md) — version history.
+- [Contributing](CONTRIBUTING.md) — local workflow and quality gates.
+
 ## Requirements
 
 - PHP 8.3+ (PHP 8.4+ required for Symfony 8)
