@@ -20,20 +20,32 @@ GoogleSheetsBundle::loadExtension(...)
             │                                                                                       │
             │                                                                                       ├─factory─▶ google_sheets.sheets_client  (SheetsClient, NON-SHARED)
             │                                                                                       │
-            │                                                                                       └─arg─▶ google_sheets.sheets_service  (SheetsService, shared, public)
+            │                                                                                       └─arg─▶ google_sheets.sheets_service.<name>  (SheetsService, one per configured spreadsheet, public)
 ```
+
+Per-spreadsheet binding (Flysystem-bundle pattern):
+
+- For every entry under `google_sheets.spreadsheets`, the bundle creates `google_sheets.sheets_service.<name>` with the spreadsheet ID baked into the constructor.
+- An autowire-by-name alias `SheetsService $<camelCaseName>` resolves to that concrete service.
+- The `default_spreadsheet` entry additionally backs the bare `SheetsService` alias and `google_sheets.sheets_service`.
 
 Class aliases registered for autowiring:
 
-| FQCN                                        | Targets                              |
-|---------------------------------------------|--------------------------------------|
-| `Gulaandrij\GoogleSheetsBundle\Service\SheetsService`         | `google_sheets.sheets_service` (public) |
-| `Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory`   | `google_sheets.sheets_client_factory` |
-| `Revolution\Google\Sheets\SheetsClient`     | `google_sheets.sheets_client` (non-shared) |
-| `Google\Service\Sheets`                     | `google_sheets.google_service`        |
-| `Google\Client`                             | `google_sheets.google_client`         |
+| FQCN                                                                  | Targets                                                                                          |
+|-----------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| `Gulaandrij\GoogleSheetsBundle\Service\SheetsService`                 | `google_sheets.sheets_service.<default_spreadsheet>` (public, only registered when spreadsheets are configured) |
+| `Gulaandrij\GoogleSheetsBundle\Service\SheetsService $<varName>`      | `google_sheets.sheets_service.<spreadsheet>` (public, one alias per declared spreadsheet)        |
+| `Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory`           | `google_sheets.sheets_client_factory`                                                            |
+| `Revolution\Google\Sheets\SheetsClient`                               | `google_sheets.sheets_client` (non-shared)                                                       |
+| `Google\Service\Sheets`                                               | `google_sheets.google_service`                                                                   |
+| `Google\Client`                                                       | `google_sheets.google_client`                                                                    |
 
-Inject whichever level fits — `SheetsService` for everyday code, `SheetsClient` for advanced operations, `Google\Client` to reuse the same transport for other Google APIs in the same project.
+Inject whichever level fits:
+
+- `SheetsService $<name>` — everyday application code (the recommended pattern).
+- `SheetsClientFactory` — dynamic spreadsheet IDs not known at boot time.
+- `SheetsClient` (autowired or `factory->create()`) — advanced operations not covered by `SheetsService`.
+- `Google\Client` — reuse the same authenticated transport for other Google APIs in the project.
 
 ## Why a fresh `SheetsClient` per call?
 

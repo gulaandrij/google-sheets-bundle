@@ -38,6 +38,8 @@ return [
 
 ## Configuration
 
+The bundle follows the same shape as [`league/flysystem-bundle`](https://github.com/thephpleague/flysystem-bundle): declare one or more named spreadsheets, and the bundle wires a dedicated `SheetsService` instance per name that you can autowire by variable name.
+
 Create `config/packages/google_sheets.yaml`:
 
 ```yaml
@@ -52,7 +54,19 @@ google_sheets:
     scopes:
         - 'https://www.googleapis.com/auth/spreadsheets'
         - 'https://www.googleapis.com/auth/drive.readonly'
+    spreadsheets:
+        allocators: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
+        reports:    '%env(GOOGLE_REPORTS_SHEET_ID)%'
+    default_spreadsheet: allocators     # required when more than one spreadsheet is declared
 ```
+
+Each entry under `spreadsheets` becomes:
+
+- A service at `google_sheets.sheets_service.<name>` (public).
+- An autowire-by-name binding `SheetsService $<camelCaseName>` so `__construct(SheetsService $allocators)` resolves automatically.
+- For the `default_spreadsheet` entry, the bare `SheetsService` alias and `SheetsService::class` autowire target.
+
+`spreadsheets` is optional — if you only need the lower-level `SheetsClient` / `SheetsClientFactory` services, omit it entirely. If you declare exactly one spreadsheet, it becomes the default automatically; with more than one you must set `default_spreadsheet` explicitly (the bundle fails at boot otherwise).
 
 If no `scopes` are set the bundle defaults to read-only access:
 
@@ -74,38 +88,48 @@ The bundle will refuse to build the `Google\Client` if none of the three are con
 
 ## Usage
 
-Autowire `SheetsService` and call its high-level methods. The service takes the spreadsheet ID and tab name on every call, so there is no shared state between operations.
+Each named spreadsheet has its own `SheetsService` instance bound to that spreadsheet ID. Type-hint `SheetsService` and name the constructor parameter after the spreadsheet:
 
 ```php
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
 
 final class AllocatorReport
 {
-    public function __construct(private readonly SheetsService $sheets) {}
+    public function __construct(
+        private readonly SheetsService $allocators,   // → bound to spreadsheets.allocators
+        private readonly SheetsService $reports,      // → bound to spreadsheets.reports
+    ) {}
 
     public function run(): void
     {
-        $rows = $this->sheets->readAssoc('1abcDEFghi...', 'Allocator List');
+        $rows = $this->allocators->readAssoc('Allocator List');
         // $rows = [['Name' => 'Alice', 'Email' => 'a@example.com'], ...]
 
-        $this->sheets->append('1abcDEFghi...', 'Allocator List', [
+        $this->allocators->append('Allocator List', [
             ['Name' => 'Bob', 'Email' => 'b@example.com'],
         ]);
+
+        $this->reports->update('Daily', 'A1', [['Date', 'Count'], ['2026-06-07', 42]]);
     }
 }
 ```
 
+Variable names with underscores or dashes in the config key become camelCase bindings: `billing_data` → `$billingData`, `my-reports` → `$myReports`.
+
+If you need a dynamic spreadsheet ID (only known at runtime), inject `SheetsClientFactory` instead and drive the client directly — see [Architecture](docs/architecture.md).
+
 ### API
 
 ```php
-SheetsService::readRaw(string $spreadsheetId, string $sheetName, ?string $range = null): array
-SheetsService::readAssoc(string $spreadsheetId, string $sheetName, ?string $range = null): array
-SheetsService::listSheets(string $spreadsheetId): array
-SheetsService::listSheetsWithIds(string $spreadsheetId): array
-SheetsService::append(string $spreadsheetId, string $sheetName, array $rows, string $valueInputOption = 'RAW', string $insertDataOption = 'OVERWRITE'): AppendValuesResponse
-SheetsService::update(string $spreadsheetId, string $sheetName, string $range, array $values, string $valueInputOption = 'RAW'): BatchUpdateValuesResponse
-SheetsService::clear(string $spreadsheetId, string $sheetName, ?string $range = null): ?ClearValuesResponse
+SheetsService::readRaw(string $sheetName, ?string $range = null): array
+SheetsService::readAssoc(string $sheetName, ?string $range = null): array
+SheetsService::listSheets(): array
+SheetsService::listSheetsWithIds(): array
+SheetsService::append(string $sheetName, array $rows, string $valueInputOption = 'RAW', string $insertDataOption = 'OVERWRITE'): AppendValuesResponse
+SheetsService::update(string $sheetName, string $range, array $values, string $valueInputOption = 'RAW'): BatchUpdateValuesResponse
+SheetsService::clear(string $sheetName, ?string $range = null): ?ClearValuesResponse
 SheetsService::client(): SheetsClient
+SheetsService::getSpreadsheetId(): string
 ```
 
 - `readRaw` returns each row as a positional array (`list<list<mixed>>`).
@@ -123,14 +147,15 @@ The underlying `Revolution\Google\Sheets\SheetsClient` keeps `range`, `majorDime
 
 Each layer is registered both under a typed alias and an explicit service ID:
 
-| Service                                       | Notes                                                                  |
-|-----------------------------------------------|------------------------------------------------------------------------|
-| `Gulaandrij\GoogleSheetsBundle\Service\SheetsService`     | Public, the recommended entry point.                                   |
-| `Revolution\Google\Sheets\SheetsClient`       | Configured client with `setService(...)` already called.               |
-| `Google\Service\Sheets`                       | Raw `spreadsheets` resource used to issue arbitrary v4 API calls.      |
-| `Google\Client`                               | Authenticated transport; reuse for other Google APIs in your project.  |
+| Service                                                                   | Notes                                                                          |
+|---------------------------------------------------------------------------|--------------------------------------------------------------------------------|
+| `Gulaandrij\GoogleSheetsBundle\Service\SheetsService`                     | Public; resolves to the `default_spreadsheet` instance. Also bindable by name. |
+| `Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory`               | Builds a fresh `SheetsClient` per `create()` call.                              |
+| `Revolution\Google\Sheets\SheetsClient`                                   | Non-shared; configured client with `setService(...)` already called.            |
+| `Google\Service\Sheets`                                                   | Raw `spreadsheets` resource used to issue arbitrary v4 API calls.               |
+| `Google\Client`                                                           | Authenticated transport; reuse for other Google APIs in your project.           |
 
-All four are autowireable by their class name.
+All five are autowireable by class name. `SheetsService` is additionally autowireable by variable name as described above.
 
 ## Testing
 

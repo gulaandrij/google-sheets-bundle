@@ -64,6 +64,40 @@ final class GoogleSheetsBundle extends AbstractBundle
                         GoogleSheets::DRIVE_READONLY,
                     ])
                 ->end()
+                ->arrayNode('spreadsheets')
+                    ->info('Map of `name => spreadsheetId`. Each named entry gets its own SheetsService instance, autowireable as `SheetsService $<name>`.')
+                    ->normalizeKeys(false)
+                    ->useAttributeAsKey('name')
+                    ->scalarPrototype()
+                        ->validate()
+                            ->ifTrue(static fn (mixed $v): bool => !is_string($v) || '' === $v)
+                            ->thenInvalid('Each entry under google_sheets.spreadsheets must be a non-empty string spreadsheet ID.')
+                        ->end()
+                    ->end()
+                    ->defaultValue([])
+                ->end()
+                ->scalarNode('default_spreadsheet')
+                    ->defaultNull()
+                    ->info('Name of the spreadsheets entry that backs the unqualified `SheetsService` autowire alias. Required when more than one spreadsheet is configured.')
+                ->end()
+            ->end()
+            ->validate()
+                ->ifTrue(static function (array $config): bool {
+                    $spreadsheets = $config['spreadsheets'] ?? [];
+                    $default = $config['default_spreadsheet'] ?? null;
+
+                    return is_array($spreadsheets) && count($spreadsheets) > 1 && null === $default;
+                })
+                ->thenInvalid('google_sheets.default_spreadsheet must be set when more than one spreadsheet is configured.')
+            ->end()
+            ->validate()
+                ->ifTrue(static function (array $config): bool {
+                    $spreadsheets = $config['spreadsheets'] ?? [];
+                    $default = $config['default_spreadsheet'] ?? null;
+
+                    return is_string($default) && is_array($spreadsheets) && !array_key_exists($default, $spreadsheets);
+                })
+                ->thenInvalid('google_sheets.default_spreadsheet must reference an entry declared under google_sheets.spreadsheets.')
             ->end()
         ;
     }
@@ -73,7 +107,7 @@ final class GoogleSheetsBundle extends AbstractBundle
      */
     public function loadExtension(array $config, ContainerConfigurator $container, ContainerBuilder $builder): void
     {
-        [$auth, $scopes, $applicationName] = $this->extractFactoryArgs($config);
+        [$auth, $scopes, $applicationName, $spreadsheets, $defaultName] = $this->extractFactoryArgs($config);
 
         $services = $container->services();
 
@@ -110,24 +144,49 @@ final class GoogleSheetsBundle extends AbstractBundle
             ->share(false)
         ;
 
-        $services
-            ->set('google_sheets.sheets_service', SheetsService::class)
-            ->args([service('google_sheets.sheets_client_factory')])
-            ->public()
-        ;
-
-        $services->alias(SheetsService::class, 'google_sheets.sheets_service')->public();
         $services->alias(SheetsClientFactory::class, 'google_sheets.sheets_client_factory');
         $services->alias(SheetsClient::class, 'google_sheets.sheets_client');
         $services->alias(GoogleClient::class, 'google_sheets.google_client');
         $services->alias(GoogleSheets::class, 'google_sheets.google_service');
+
+        if ([] === $spreadsheets) {
+            return;
+        }
+
+        foreach ($spreadsheets as $name => $spreadsheetId) {
+            $serviceId = 'google_sheets.sheets_service.'.$name;
+
+            $services
+                ->set($serviceId, SheetsService::class)
+                ->args([
+                    service('google_sheets.sheets_client_factory'),
+                    $spreadsheetId,
+                ])
+                ->public()
+            ;
+
+            // Autowire by variable name: `SheetsService $allocators` resolves
+            // to this concrete instance when `name` is "allocators".
+            $services
+                ->alias(SheetsService::class.' $'.self::variableName($name), $serviceId)
+                ->public()
+            ;
+        }
+
+        if (null === $defaultName) {
+            // Single-spreadsheet case: implicitly use that one as the default.
+            $defaultName = array_key_first($spreadsheets);
+        }
+
+        $services->alias(SheetsService::class, 'google_sheets.sheets_service.'.$defaultName)->public();
+        $services->alias('google_sheets.sheets_service', 'google_sheets.sheets_service.'.$defaultName)->public();
     }
 
     /**
-     * Validate the resolved config and return the three factory args in the
-     * order GoogleClientFactory expects them. Runtime validation here lets us
-     * keep loadExtension's signature exactly contravariant with the parent
-     * while still passing precisely-typed values into the container.
+     * Validate the resolved config and return the factory args plus the named
+     * spreadsheets map. Runtime validation here lets us keep loadExtension's
+     * signature exactly contravariant with the parent while still passing
+     * precisely-typed values into the container.
      *
      * @param array<int|string, mixed> $config
      *
@@ -135,6 +194,8 @@ final class GoogleSheetsBundle extends AbstractBundle
      *     0: array{api_key: string|null, client_id: string|null, client_secret: string|null, auth_config: string|array<string, mixed>|null},
      *     1: list<string>,
      *     2: string|null,
+     *     3: array<string, string>,
+     *     4: string|null,
      * }
      */
     private function extractFactoryArgs(array $config): array
@@ -167,6 +228,23 @@ final class GoogleSheetsBundle extends AbstractBundle
 
         $applicationName = $this->stringOrNull($config['application_name'] ?? null);
 
+        $spreadsheets = $config['spreadsheets'] ?? [];
+        if (!is_array($spreadsheets)) {
+            throw new LogicException('google_sheets.spreadsheets must be a map of name => id.');
+        }
+        $spreadsheetMap = [];
+        foreach ($spreadsheets as $name => $id) {
+            if (!is_string($name) || '' === $name) {
+                throw new LogicException('google_sheets.spreadsheets keys must be non-empty strings.');
+            }
+            if (!is_string($id) || '' === $id) {
+                throw new LogicException(sprintf('google_sheets.spreadsheets["%s"] must be a non-empty string.', $name));
+            }
+            $spreadsheetMap[$name] = $id;
+        }
+
+        $defaultName = $this->stringOrNull($config['default_spreadsheet'] ?? null);
+
         return [
             [
                 'api_key' => $apiKey,
@@ -176,6 +254,8 @@ final class GoogleSheetsBundle extends AbstractBundle
             ],
             $scopeList,
             $applicationName,
+            $spreadsheetMap,
+            $defaultName,
         ];
     }
 
@@ -189,5 +269,18 @@ final class GoogleSheetsBundle extends AbstractBundle
         }
 
         return $value;
+    }
+
+    /**
+     * Convert a config key like `allocators` / `my-reports` / `billing_data`
+     * into the camelCase variable name used by autowire-by-name bindings
+     * (`$allocators`, `$myReports`, `$billingData`).
+     */
+    private static function variableName(string $name): string
+    {
+        $upper = ucwords($name, '_-.');
+        $stripped = str_replace(['_', '-', '.'], '', $upper);
+
+        return lcfirst($stripped);
     }
 }

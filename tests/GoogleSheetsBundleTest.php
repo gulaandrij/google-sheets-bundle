@@ -16,6 +16,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 use Revolution\Google\Sheets\SheetsClient;
+use Symfony\Component\Config\Definition\Exception\InvalidConfigurationException;
 
 /**
  * @internal
@@ -27,19 +28,153 @@ final class GoogleSheetsBundleTest extends TestCase
 
     private ?TestKernel $kernel = null;
 
-    public function testSheetsServiceIsAvailableWithMinimalConfig(): void
+    public function testFactoryServicesAreAvailableWithMinimalConfig(): void
     {
         $kernel = $this->bootKernel([
             'auth' => ['api_key' => 'test-key'],
         ]);
 
-        self::assertTrue($kernel->getContainer()->has(SheetsService::class));
         self::assertTrue($kernel->getContainer()->has(SheetsClientFactory::class));
+        self::assertFalse(
+            $kernel->getContainer()->has(SheetsService::class),
+            'Without any configured spreadsheets the bare SheetsService alias must NOT be registered',
+        );
+    }
+
+    public function testNamedSpreadsheetGetsItsOwnService(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'allocators' => '1abc_allocators',
+            ],
+        ]);
+
+        $container = $kernel->getContainer();
+        self::assertTrue($container->has('google_sheets.sheets_service.allocators'));
+
+        $service = $container->get('google_sheets.sheets_service.allocators');
+        self::assertInstanceOf(SheetsService::class, $service);
+        self::assertSame('1abc_allocators', $service->getSpreadsheetId());
+    }
+
+    public function testSingleSpreadsheetBackingTheBareSheetsServiceAlias(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'reports' => '1xyz_reports',
+            ],
+        ]);
+
+        $container = $kernel->getContainer();
+        self::assertTrue($container->has(SheetsService::class));
+
+        $service = $container->get(SheetsService::class);
+        self::assertInstanceOf(SheetsService::class, $service);
+        self::assertSame('1xyz_reports', $service->getSpreadsheetId());
+    }
+
+    public function testMultipleSpreadsheetsWithExplicitDefault(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'allocators' => '1abc_allocators',
+                'reports' => '1xyz_reports',
+            ],
+            'default_spreadsheet' => 'reports',
+        ]);
+
+        $container = $kernel->getContainer();
+
+        $allocators = $container->get('google_sheets.sheets_service.allocators');
+        $reports = $container->get('google_sheets.sheets_service.reports');
+        self::assertInstanceOf(SheetsService::class, $allocators);
+        self::assertInstanceOf(SheetsService::class, $reports);
+        self::assertSame('1abc_allocators', $allocators->getSpreadsheetId());
+        self::assertSame('1xyz_reports', $reports->getSpreadsheetId());
+
+        $default = $container->get(SheetsService::class);
+        self::assertInstanceOf(SheetsService::class, $default);
+        self::assertSame('1xyz_reports', $default->getSpreadsheetId());
+    }
+
+    public function testMultipleSpreadsheetsWithoutDefaultFailsAtBoot(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessageMatches('/default_spreadsheet must be set/');
+
+        $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'allocators' => '1abc_allocators',
+                'reports' => '1xyz_reports',
+            ],
+        ]);
+    }
+
+    public function testDefaultPointingAtMissingSpreadsheetFailsAtBoot(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessageMatches('/default_spreadsheet must reference an entry/');
+
+        $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'allocators' => '1abc_allocators',
+            ],
+            'default_spreadsheet' => 'reports',
+        ]);
+    }
+
+    public function testAutowireByVariableNameAliasIsRegistered(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'allocators' => '1abc_allocators',
+                'reports' => '1xyz_reports',
+            ],
+            'default_spreadsheet' => 'allocators',
+        ]);
+
+        $container = $kernel->getContainer();
+
+        // Symfony stores the autowire-by-name alias under the magic ID
+        // "<TypeName> $<varName>" — verify both bindings landed.
+        self::assertTrue($container->has(SheetsService::class.' $allocators'));
+        self::assertTrue($container->has(SheetsService::class.' $reports'));
+
+        $allocators = $container->get(SheetsService::class.' $allocators');
+        $reports = $container->get(SheetsService::class.' $reports');
+        self::assertInstanceOf(SheetsService::class, $allocators);
+        self::assertInstanceOf(SheetsService::class, $reports);
+        self::assertSame('1abc_allocators', $allocators->getSpreadsheetId());
+        self::assertSame('1xyz_reports', $reports->getSpreadsheetId());
+    }
+
+    public function testHyphenAndUnderscoreNamesCamelCaseTheBinding(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'billing_data' => '1one',
+                'my-reports' => '1two',
+            ],
+            'default_spreadsheet' => 'billing_data',
+        ]);
+
+        $container = $kernel->getContainer();
+        self::assertTrue($container->has(SheetsService::class.' $billingData'));
+        self::assertTrue($container->has(SheetsService::class.' $myReports'));
     }
 
     public function testInstantiatingTheServiceWithoutCredentialsThrows(): void
     {
-        $kernel = $this->bootKernel([]);
+        $kernel = $this->bootKernel([
+            'spreadsheets' => ['x' => '1abc'],
+        ]);
 
         $this->expectException(MissingCredentialsException::class);
         $kernel->getContainer()->get(SheetsService::class);

@@ -25,6 +25,15 @@ use Revolution\Google\Sheets\SheetsClient;
 #[AllowMockObjectsWithoutExpectations]
 final class SheetsServiceTest extends TestCase
 {
+    private const SHEET_ID = '1abcSHEET';
+
+    public function testGetSpreadsheetIdExposesTheBoundId(): void
+    {
+        $service = $this->serviceWithClients($this->createMock(SheetsClient::class));
+
+        self::assertSame(self::SHEET_ID, $service->getSpreadsheetId());
+    }
+
     public function testReadRawReturnsAllRowsAsIs(): void
     {
         $rows = [
@@ -34,14 +43,14 @@ final class SheetsServiceTest extends TestCase
         ];
 
         $client = $this->createMock(SheetsClient::class);
-        $client->expects(self::once())->method('spreadsheet')->with('SHEET_ID')->willReturnSelf();
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
         $client->expects(self::once())->method('sheet')->with('People')->willReturnSelf();
         $client->expects(self::never())->method('range');
         $client->expects(self::once())->method('all')->willReturn($rows);
 
         $service = $this->serviceWithClients($client);
 
-        self::assertSame($rows, $service->readRaw('SHEET_ID', 'People'));
+        self::assertSame($rows, $service->readRaw('People'));
     }
 
     public function testReadRawAppliesRangeWhenProvided(): void
@@ -54,7 +63,7 @@ final class SheetsServiceTest extends TestCase
 
         $service = $this->serviceWithClients($client);
 
-        self::assertSame([], $service->readRaw('SHEET_ID', 'People', 'A1:B10'));
+        self::assertSame([], $service->readRaw('People', 'A1:B10'));
     }
 
     public function testReadAssocCombinesHeaderAndRows(): void
@@ -72,7 +81,7 @@ final class SheetsServiceTest extends TestCase
             ['Name' => 'Bob', 'Email' => 'bob@example.com'],
         ];
 
-        self::assertSame($expected, $service->readAssoc('SHEET_ID', 'People'));
+        self::assertSame($expected, $service->readAssoc('People'));
     }
 
     public function testReadAssocPadsShortRowsWithEmptyStrings(): void
@@ -86,7 +95,7 @@ final class SheetsServiceTest extends TestCase
 
         self::assertSame(
             [['Name' => 'Alice', 'Email' => 'alice@example.com', 'Phone' => '']],
-            $service->readAssoc('SHEET_ID', 'People'),
+            $service->readAssoc('People'),
         );
     }
 
@@ -101,7 +110,7 @@ final class SheetsServiceTest extends TestCase
 
         self::assertSame(
             [['Name' => 'Alice', 'Email' => 'alice@example.com']],
-            $service->readAssoc('SHEET_ID', 'People'),
+            $service->readAssoc('People'),
         );
     }
 
@@ -109,7 +118,7 @@ final class SheetsServiceTest extends TestCase
     {
         $service = $this->serviceWithClients($this->stubClientReturning([]));
 
-        self::assertSame([], $service->readAssoc('SHEET_ID', 'People'));
+        self::assertSame([], $service->readAssoc('People'));
     }
 
     public function testReadAssocThrowsOnDuplicateHeaderValues(): void
@@ -123,7 +132,7 @@ final class SheetsServiceTest extends TestCase
 
         $this->expectException(DuplicateHeaderException::class);
         $this->expectExceptionMessage('Duplicate header value "Notes"');
-        $service->readAssoc('SHEET_ID', 'People');
+        $service->readAssoc('People');
     }
 
     public function testReadAssocThrowsOnNonScalarHeaderCell(): void
@@ -137,29 +146,29 @@ final class SheetsServiceTest extends TestCase
 
         $this->expectException(InvalidHeaderException::class);
         $this->expectExceptionMessage('Header cell at index 1');
-        $service->readAssoc('SHEET_ID', 'People');
+        $service->readAssoc('People');
     }
 
     public function testListSheetsReturnsListOfTabNames(): void
     {
         $client = $this->createMock(SheetsClient::class);
-        $client->expects(self::once())->method('spreadsheet')->with('SHEET_ID')->willReturnSelf();
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
         $client->expects(self::once())->method('sheetList')->willReturn([101 => 'One', 202 => 'Two', 303 => 'Three']);
 
         $service = $this->serviceWithClients($client);
 
-        self::assertSame(['One', 'Two', 'Three'], $service->listSheets('SHEET_ID'));
+        self::assertSame(['One', 'Two', 'Three'], $service->listSheets());
     }
 
     public function testListSheetsWithIdsPreservesTheSheetIdMap(): void
     {
         $client = $this->createMock(SheetsClient::class);
-        $client->expects(self::once())->method('spreadsheet')->with('SHEET_ID')->willReturnSelf();
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
         $client->expects(self::once())->method('sheetList')->willReturn([101 => 'One', 202 => 'Two']);
 
         $service = $this->serviceWithClients($client);
 
-        self::assertSame([101 => 'One', 202 => 'Two'], $service->listSheetsWithIds('SHEET_ID'));
+        self::assertSame([101 => 'One', 202 => 'Two'], $service->listSheetsWithIds());
     }
 
     public function testAppendForwardsRowsToTheUnderlyingClient(): void
@@ -167,7 +176,7 @@ final class SheetsServiceTest extends TestCase
         $response = $this->createMock(AppendValuesResponse::class);
 
         $client = $this->createMock(SheetsClient::class);
-        $client->expects(self::once())->method('spreadsheet')->with('SHEET_ID')->willReturnSelf();
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
         $client->expects(self::once())->method('sheet')->with('Allocators')->willReturnSelf();
         $client->expects(self::once())
             ->method('append')
@@ -178,7 +187,7 @@ final class SheetsServiceTest extends TestCase
 
         self::assertSame(
             $response,
-            $service->append('SHEET_ID', 'Allocators', [['a', 'b']], 'USER_ENTERED', 'INSERT_ROWS'),
+            $service->append('Allocators', [['a', 'b']], 'USER_ENTERED', 'INSERT_ROWS'),
         );
     }
 
@@ -190,7 +199,7 @@ final class SheetsServiceTest extends TestCase
         $service = $this->serviceWithClients($client);
 
         $this->expectException(MixedRowShapeException::class);
-        $service->append('SHEET_ID', 'tab', [
+        $service->append('tab', [
             ['Name' => 'A', 'Email' => 'a@x'],
             ['B', 'b@x'],
         ]);
@@ -212,7 +221,7 @@ final class SheetsServiceTest extends TestCase
             ['Name' => 'B', 'Email' => 'b@x'],
         ];
 
-        self::assertSame($response, $service->append('SHEET_ID', 'tab', $rows));
+        self::assertSame($response, $service->append('tab', $rows));
     }
 
     public function testUpdateForwardsRangeAndValuesToTheUnderlyingClient(): void
@@ -220,7 +229,7 @@ final class SheetsServiceTest extends TestCase
         $response = $this->createMock(BatchUpdateValuesResponse::class);
 
         $client = $this->createMock(SheetsClient::class);
-        $client->expects(self::once())->method('spreadsheet')->with('SHEET_ID')->willReturnSelf();
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
         $client->expects(self::once())->method('sheet')->with('People')->willReturnSelf();
         $client->expects(self::once())->method('range')->with('A2:B2')->willReturnSelf();
         $client->expects(self::once())->method('update')->with([['Carol', 'c@example.com']], 'RAW')->willReturn($response);
@@ -229,7 +238,7 @@ final class SheetsServiceTest extends TestCase
 
         self::assertSame(
             $response,
-            $service->update('SHEET_ID', 'People', 'A2:B2', [['Carol', 'c@example.com']]),
+            $service->update('People', 'A2:B2', [['Carol', 'c@example.com']]),
         );
     }
 
@@ -238,14 +247,14 @@ final class SheetsServiceTest extends TestCase
         $response = $this->createMock(ClearValuesResponse::class);
 
         $client = $this->createMock(SheetsClient::class);
-        $client->expects(self::once())->method('spreadsheet')->with('SHEET_ID')->willReturnSelf();
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
         $client->expects(self::once())->method('sheet')->with('People')->willReturnSelf();
         $client->expects(self::never())->method('range');
         $client->expects(self::once())->method('clear')->willReturn($response);
 
         $service = $this->serviceWithClients($client);
 
-        self::assertSame($response, $service->clear('SHEET_ID', 'People'));
+        self::assertSame($response, $service->clear('People'));
     }
 
     public function testClearWithRangeAppliesTheRange(): void
@@ -258,30 +267,27 @@ final class SheetsServiceTest extends TestCase
 
         $service = $this->serviceWithClients($client);
 
-        self::assertNull($service->clear('SHEET_ID', 'People', 'A2:Z'));
+        self::assertNull($service->clear('People', 'A2:Z'));
     }
 
     public function testEachCallObtainsAFreshClientFromTheFactory(): void
     {
         $clientA = $this->createMock(SheetsClient::class);
-        $clientA->expects(self::once())->method('spreadsheet')->with('A')->willReturnSelf();
-        $clientA->expects(self::once())->method('sheet')->with('tab')->willReturnSelf();
+        $clientA->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
+        $clientA->expects(self::once())->method('sheet')->with('tabA')->willReturnSelf();
         $clientA->expects(self::never())->method('range');
         $clientA->expects(self::once())->method('all')->willReturn([]);
 
-        // The second call must NOT reach $clientA at all — it must go through a
-        // brand-new client. Otherwise stateful selectors from call A would leak
-        // into call B (the bug the factory pattern exists to prevent).
         $clientB = $this->createMock(SheetsClient::class);
-        $clientB->expects(self::once())->method('spreadsheet')->with('B')->willReturnSelf();
-        $clientB->expects(self::once())->method('sheet')->with('tab')->willReturnSelf();
+        $clientB->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
+        $clientB->expects(self::once())->method('sheet')->with('tabB')->willReturnSelf();
         $clientB->expects(self::never())->method('range');
         $clientB->expects(self::once())->method('all')->willReturn([]);
 
         $service = $this->serviceWithClients($clientA, $clientB);
 
-        self::assertSame([], $service->readRaw('A', 'tab'));
-        self::assertSame([], $service->readRaw('B', 'tab'));
+        self::assertSame([], $service->readRaw('tabA'));
+        self::assertSame([], $service->readRaw('tabB'));
     }
 
     public function testClientReturnsAFreshInstanceEachCall(): void
@@ -309,14 +315,14 @@ final class SheetsServiceTest extends TestCase
     }
 
     /**
-     * Build a SheetsService backed by a SheetsClientFactory that returns the
-     * given clients in order — one per `create()` call.
+     * Build a SheetsService bound to SHEET_ID and backed by a
+     * SheetsClientFactory that returns the given clients in order.
      */
-    private function serviceWithClients(SheetsClient ...$clients): SheetsService
+    private function serviceWithClients(SheetsClient $firstClient, SheetsClient ...$rest): SheetsService
     {
         $factory = $this->createMock(SheetsClientFactory::class);
-        $factory->method('create')->willReturnOnConsecutiveCalls(...array_values($clients));
+        $factory->method('create')->willReturnOnConsecutiveCalls($firstClient, ...array_values($rest));
 
-        return new SheetsService($factory);
+        return new SheetsService($factory, self::SHEET_ID);
     }
 }

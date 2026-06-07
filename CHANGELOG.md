@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file. The format foll
 ## [Unreleased]
 
 ### Added
+- Named spreadsheets following the `league/flysystem-bundle` pattern: declare each spreadsheet under `google_sheets.spreadsheets.<name>`, inject the bound instance via `SheetsService $<camelCaseName>`. The bare `SheetsService` alias is wired to the `default_spreadsheet`.
+- Boot-time validation rejecting `default_spreadsheet` values that don't match a configured spreadsheet, and configurations with multiple spreadsheets but no `default_spreadsheet`.
+- `SheetsService::getSpreadsheetId()` to read the bound ID.
+
+### Changed
+- **BREAKING**: `SheetsService` constructor now takes `string $spreadsheetId`; method signatures drop the `$spreadsheetId` parameter. See [UPGRADE.md](UPGRADE.md) for the migration recipe.
+- The bare `SheetsService` autowire alias is now only registered when at least one spreadsheet is configured.
+
+### Added
 - `SheetsClientFactory` service registered as `google_sheets.sheets_client_factory` (autowire alias). `SheetsService` now obtains a fresh `SheetsClient` per call.
 - `SheetsService::listSheetsWithIds()` — returns the `sheetId => title` map (the existing `listSheets()` still returns just the names).
 - `DuplicateHeaderException`, `InvalidHeaderException`, `MixedRowShapeException` — explicit failure modes for the previously-silent corner cases.

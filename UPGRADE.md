@@ -6,6 +6,53 @@ Behavioural and API changes between bundle versions. For dependency bumps and bu
 
 Major API will be locked at 1.0; no breaking changes planned for this release.
 
+## Pre-1.0 → 0.3.0
+
+The bundle adopts the `league/flysystem-bundle` pattern for spreadsheet selection. The big change: `SheetsService` is now bound to a single spreadsheet (configured under `google_sheets.spreadsheets`), and its methods no longer take a `$spreadsheetId` argument.
+
+### Update your config
+
+```diff
+ google_sheets:
+     auth:
+         api_key: '%env(GOOGLE_API_KEY)%'
++    spreadsheets:
++        allocators: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
++        reports:    '%env(GOOGLE_REPORTS_SHEET_ID)%'
++    default_spreadsheet: allocators
+```
+
+`default_spreadsheet` is required when you declare more than one spreadsheet; with exactly one it's inferred automatically.
+
+### Update your call sites
+
+```diff
+ final class AllocatorReport
+ {
+-    public function __construct(private readonly SheetsService $sheets) {}
++    public function __construct(private readonly SheetsService $allocators) {}
+
+     public function run(): void
+     {
+-        $rows = $this->sheets->readAssoc('1abcDEFghi...', 'Allocator List');
+-        $this->sheets->append('1abcDEFghi...', 'Allocator List', $newRows);
++        $rows = $this->allocators->readAssoc('Allocator List');
++        $this->allocators->append('Allocator List', $newRows);
+     }
+ }
+```
+
+If your spreadsheet ID is only known at runtime, drop down to `SheetsClientFactory`:
+
+```php
+public function __construct(private readonly SheetsClientFactory $factory) {}
+
+public function read(string $spreadsheetId, string $tab): array
+{
+    return $this->factory->create()->spreadsheet($spreadsheetId)->sheet($tab)->all();
+}
+```
+
 ## Pre-1.0 → 0.2.0
 
 Pre-1.0 releases may break public API at any time. The 0.2.0 release introduced:
@@ -17,8 +64,8 @@ Pre-1.0 releases may break public API at any time. The 0.2.0 release introduced:
 
 If you're migrating off the underlying library directly:
 
-1. Replace direct `new Revolution\Google\Sheets\SheetsClient()` calls with the bundle's autowired `SheetsService` (recommended) or `SheetsClientFactory::create()` (for full client control).
+1. Declare the spreadsheet IDs you read/write under `google_sheets.spreadsheets` and inject the corresponding `SheetsService $<name>`. For one-off spreadsheets, inject `SheetsClientFactory` and drive the client directly.
 2. Move credential setup from your code (`$client->setScopes(...)`, `$client->setAuthConfig(...)`) into `config/packages/google_sheets.yaml`.
-3. Replace chained `spreadsheet(...)->sheet(...)->get()` patterns with `SheetsService::readRaw($spreadsheetId, $tab)` or `readAssoc`.
+3. Replace chained `spreadsheet(...)->sheet(...)->get()` patterns with `SheetsService::readRaw($tab)` or `readAssoc($tab)`.
 4. Replace `$sheets->collection($header, $rows)->toArray()` with `readAssoc` (which performs the same operation while enforcing header uniqueness).
 5. Audit for sticky-state bugs: anywhere you set `range()`, `valueRenderOption()`, or `majorDimension()` and reused the client, switch to the per-call methods on `SheetsService` (which always fetch a fresh client).
