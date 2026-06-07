@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Gulaandrij\GoogleSheetsBundle\Service;
 
+use Google\Service\Drive;
 use Google\Service\Sheets\AppendValuesResponse;
+use Google\Service\Sheets\BatchUpdateSpreadsheetResponse;
 use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
 use Gulaandrij\GoogleSheetsBundle\Exception\DuplicateHeaderException;
@@ -27,6 +29,22 @@ use Revolution\Google\Sheets\SheetsClient;
  */
 final class SheetsService
 {
+    public const MAJOR_DIMENSION_ROWS = 'ROWS';
+    public const MAJOR_DIMENSION_COLUMNS = 'COLUMNS';
+
+    public const VALUE_RENDER_FORMATTED = 'FORMATTED_VALUE';
+    public const VALUE_RENDER_UNFORMATTED = 'UNFORMATTED_VALUE';
+    public const VALUE_RENDER_FORMULA = 'FORMULA';
+
+    public const DATE_TIME_RENDER_SERIAL = 'SERIAL_NUMBER';
+    public const DATE_TIME_RENDER_FORMATTED = 'FORMATTED_STRING';
+
+    public const VALUE_INPUT_RAW = 'RAW';
+    public const VALUE_INPUT_USER_ENTERED = 'USER_ENTERED';
+
+    public const INSERT_DATA_OVERWRITE = 'OVERWRITE';
+    public const INSERT_DATA_INSERT_ROWS = 'INSERT_ROWS';
+
     public function __construct(
         private readonly SheetsClientFactory $factory,
         private readonly string $spreadsheetId,
@@ -38,20 +56,29 @@ final class SheetsService
         return $this->spreadsheetId;
     }
 
+    // ------------------------------------------------------------------
+    // Reads
+    // ------------------------------------------------------------------
+
     /**
      * Read all rows from a sheet (or sub-range) as raw indexed arrays.
      *
      * @return list<list<mixed>>
      */
-    public function readRaw(string $sheetName, ?string $range = null): array
-    {
-        $selection = $this->factory->create()
-            ->spreadsheet($this->spreadsheetId)
-            ->sheet($sheetName);
-
-        if (null !== $range) {
-            $selection = $selection->range($range);
-        }
+    public function readRaw(
+        string $sheetName,
+        ?string $range = null,
+        ?string $majorDimension = null,
+        ?string $valueRenderOption = null,
+        ?string $dateTimeRenderOption = null,
+    ): array {
+        $selection = $this->applyReadOptions(
+            $this->factory->create()->spreadsheet($this->spreadsheetId)->sheet($sheetName),
+            $range,
+            $majorDimension,
+            $valueRenderOption,
+            $dateTimeRenderOption,
+        );
 
         /** @var list<list<mixed>> $rows */
         $rows = $selection->all();
@@ -68,9 +95,14 @@ final class SheetsService
      * @throws DuplicateHeaderException when the first row contains a duplicate cell value
      * @throws InvalidHeaderException   when a header cell is not a scalar/null
      */
-    public function readAssoc(string $sheetName, ?string $range = null): array
-    {
-        $rows = $this->readRaw($sheetName, $range);
+    public function readAssoc(
+        string $sheetName,
+        ?string $range = null,
+        ?string $majorDimension = null,
+        ?string $valueRenderOption = null,
+        ?string $dateTimeRenderOption = null,
+    ): array {
+        $rows = $this->readRaw($sheetName, $range, $majorDimension, $valueRenderOption, $dateTimeRenderOption);
 
         if ([] === $rows) {
             return [];
@@ -98,27 +130,34 @@ final class SheetsService
     }
 
     /**
-     * List all sheet (tab) names in the bound spreadsheet.
+     * Read just the first row of a sheet (or sub-range).
      *
-     * @return list<string>
+     * @return list<mixed>
      */
-    public function listSheets(): array
-    {
-        return array_values($this->listSheetsWithIds());
+    public function firstRow(
+        string $sheetName,
+        ?string $range = null,
+        ?string $majorDimension = null,
+        ?string $valueRenderOption = null,
+        ?string $dateTimeRenderOption = null,
+    ): array {
+        $selection = $this->applyReadOptions(
+            $this->factory->create()->spreadsheet($this->spreadsheetId)->sheet($sheetName),
+            $range,
+            $majorDimension,
+            $valueRenderOption,
+            $dateTimeRenderOption,
+        );
+
+        /** @var list<mixed> $first */
+        $first = $selection->first();
+
+        return $first;
     }
 
-    /**
-     * List all sheets in the bound spreadsheet as a `sheetId => title` map.
-     *
-     * @return array<int, string>
-     */
-    public function listSheetsWithIds(): array
-    {
-        /** @var array<int, string> $map */
-        $map = $this->factory->create()->spreadsheet($this->spreadsheetId)->sheetList();
-
-        return $map;
-    }
+    // ------------------------------------------------------------------
+    // Writes
+    // ------------------------------------------------------------------
 
     /**
      * Append rows to the end of a sheet.
@@ -136,8 +175,8 @@ final class SheetsService
     public function append(
         string $sheetName,
         array $rows,
-        string $valueInputOption = 'RAW',
-        string $insertDataOption = 'OVERWRITE',
+        string $valueInputOption = self::VALUE_INPUT_RAW,
+        string $insertDataOption = self::INSERT_DATA_OVERWRITE,
     ): AppendValuesResponse {
         $this->assertHomogeneousRows($rows);
 
@@ -156,7 +195,7 @@ final class SheetsService
         string $sheetName,
         string $range,
         array $values,
-        string $valueInputOption = 'RAW',
+        string $valueInputOption = self::VALUE_INPUT_RAW,
     ): BatchUpdateValuesResponse {
         return $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
@@ -181,6 +220,112 @@ final class SheetsService
         return $selection->clear();
     }
 
+    // ------------------------------------------------------------------
+    // Tab CRUD
+    // ------------------------------------------------------------------
+
+    /**
+     * Create a new tab in the bound spreadsheet.
+     */
+    public function addSheet(string $title): BatchUpdateSpreadsheetResponse
+    {
+        return $this->factory->create()
+            ->spreadsheet($this->spreadsheetId)
+            ->addSheet($title);
+    }
+
+    /**
+     * Delete a tab from the bound spreadsheet.
+     */
+    public function deleteSheet(string $title): BatchUpdateSpreadsheetResponse
+    {
+        return $this->factory->create()
+            ->spreadsheet($this->spreadsheetId)
+            ->deleteSheet($title);
+    }
+
+    // ------------------------------------------------------------------
+    // Discovery
+    // ------------------------------------------------------------------
+
+    /**
+     * List all sheet (tab) names in the bound spreadsheet.
+     *
+     * @return list<string>
+     */
+    public function listSheets(): array
+    {
+        return array_values($this->listSheetsWithIds());
+    }
+
+    /**
+     * List all sheets in the bound spreadsheet as a `sheetId => title` map.
+     *
+     * @return array<int, string>
+     */
+    public function listSheetsWithIds(): array
+    {
+        /** @var array<int, string> $map */
+        $map = $this->factory->create()->spreadsheet($this->spreadsheetId)->sheetList();
+
+        return $map;
+    }
+
+    /**
+     * Resolve a stable sheet ID to its current title.
+     */
+    public function findSheetNameById(int $sheetId): ?string
+    {
+        return $this->listSheetsWithIds()[$sheetId] ?? null;
+    }
+
+    /**
+     * List every Google Sheets file the credential can see, as a
+     * `fileId => title` map. Requires a Drive read scope on the credential.
+     *
+     * Note: this is a global Drive query — it ignores the bound spreadsheet ID
+     * and lists all spreadsheets visible to the credential. Convenient for
+     * discovery, but cross-cuts the per-spreadsheet binding.
+     *
+     * @return array<string, string>
+     */
+    public function listSpreadsheets(): array
+    {
+        /** @var array<string, string> $list */
+        $list = $this->factory->create()->spreadsheetList();
+
+        return $list;
+    }
+
+    // ------------------------------------------------------------------
+    // Metadata
+    // ------------------------------------------------------------------
+
+    /**
+     * Get metadata about the bound spreadsheet (title, locale, timezone, etc.).
+     */
+    public function spreadsheetProperties(): object
+    {
+        return $this->factory->create()
+            ->spreadsheet($this->spreadsheetId)
+            ->spreadsheetProperties();
+    }
+
+    /**
+     * Get metadata about a single tab (gridProperties, index, sheetType, etc.).
+     */
+    public function sheetProperties(string $sheetName): object
+    {
+        return $this->factory->create()
+            ->spreadsheet($this->spreadsheetId)
+            ->sheet($sheetName)
+            ->sheetProperties();
+    }
+
+    // ------------------------------------------------------------------
+    // Escape hatches
+    // ------------------------------------------------------------------
+
     /**
      * Return a fresh `SheetsClient` for operations not covered by this service.
      * Each call constructs a new client so callers cannot leak state into other
@@ -189,6 +334,43 @@ final class SheetsService
     public function client(): SheetsClient
     {
         return $this->factory->create();
+    }
+
+    /**
+     * Return the shared `Google\Service\Drive` instance for Drive-level
+     * operations (file metadata, permissions, etc.) not covered by this
+     * service.
+     */
+    public function driveService(): Drive
+    {
+        return $this->factory->create()->getDriveService();
+    }
+
+    // ------------------------------------------------------------------
+    // Internals
+    // ------------------------------------------------------------------
+
+    private function applyReadOptions(
+        SheetsClient $selection,
+        ?string $range,
+        ?string $majorDimension,
+        ?string $valueRenderOption,
+        ?string $dateTimeRenderOption,
+    ): SheetsClient {
+        if (null !== $range) {
+            $selection = $selection->range($range);
+        }
+        if (null !== $majorDimension) {
+            $selection = $selection->majorDimension($majorDimension);
+        }
+        if (null !== $valueRenderOption) {
+            $selection = $selection->valueRenderOption($valueRenderOption);
+        }
+        if (null !== $dateTimeRenderOption) {
+            $selection = $selection->dateTimeRenderOption($dateTimeRenderOption);
+        }
+
+        return $selection;
     }
 
     /**

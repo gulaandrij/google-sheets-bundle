@@ -38,6 +38,7 @@ Class aliases registered for autowiring:
 | `Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory`           | `google_sheets.sheets_client_factory`                                                            |
 | `Revolution\Google\Sheets\SheetsClient`                               | `google_sheets.sheets_client` (non-shared)                                                       |
 | `Google\Service\Sheets`                                               | `google_sheets.google_service`                                                                   |
+| `Google\Service\Drive`                                                | `google_sheets.google_drive` (used by `listSpreadsheets()` and `SheetsService::driveService()`)  |
 | `Google\Client`                                                       | `google_sheets.google_client`                                                                    |
 
 Inject whichever level fits:

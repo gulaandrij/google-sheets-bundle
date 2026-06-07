@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gulaandrij\GoogleSheetsBundle;
 
 use Google\Client as GoogleClient;
+use Google\Service\Drive as GoogleDrive;
 use Google\Service\Sheets as GoogleSheets;
 use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
@@ -131,8 +132,16 @@ final class GoogleSheetsBundle extends AbstractBundle
         ;
 
         $services
+            ->set('google_sheets.google_drive', GoogleDrive::class)
+            ->args([service('google_sheets.google_client')])
+        ;
+
+        $services
             ->set('google_sheets.sheets_client_factory', SheetsClientFactory::class)
-            ->args([service('google_sheets.google_service')])
+            ->args([
+                service('google_sheets.google_service'),
+                service('google_sheets.google_drive'),
+            ])
         ;
 
         // Each request for the SheetsClient gets a brand-new instance so the
@@ -148,6 +157,7 @@ final class GoogleSheetsBundle extends AbstractBundle
         $services->alias(SheetsClient::class, 'google_sheets.sheets_client');
         $services->alias(GoogleClient::class, 'google_sheets.google_client');
         $services->alias(GoogleSheets::class, 'google_sheets.google_service');
+        $services->alias(GoogleDrive::class, 'google_sheets.google_drive');
 
         if ([] === $spreadsheets) {
             return;

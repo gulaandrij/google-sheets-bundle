@@ -8,6 +8,9 @@ All notable changes to this project are documented in this file. The format foll
 - Named spreadsheets following the `league/flysystem-bundle` pattern: declare each spreadsheet under `google_sheets.spreadsheets.<name>`, inject the bound instance via `SheetsService $<camelCaseName>`. The bare `SheetsService` alias is wired to the `default_spreadsheet`.
 - Boot-time validation rejecting `default_spreadsheet` values that don't match a configured spreadsheet, and configurations with multiple spreadsheets but no `default_spreadsheet`.
 - `SheetsService::getSpreadsheetId()` to read the bound ID.
+- Full API coverage of the underlying `SheetsClient`: `firstRow`, `addSheet`, `deleteSheet`, `findSheetNameById`, `listSpreadsheets`, `spreadsheetProperties`, `sheetProperties`, `driveService`.
+- Optional `majorDimension`, `valueRenderOption`, `dateTimeRenderOption` arguments on `readRaw` / `readAssoc` / `firstRow` for fine-grained read tuning. Class constants for the Sheets API enum values.
+- `Google\Service\Drive` is registered as `google_sheets.google_drive` (alias `Google\Service\Drive`) so `listSpreadsheets()` and drive-aware paths work outside Laravel.
 
 ### Changed
 - **BREAKING**: `SheetsService` constructor now takes `string $spreadsheetId`; method signatures drop the `$spreadsheetId` parameter. See [UPGRADE.md](UPGRADE.md) for the migration recipe.

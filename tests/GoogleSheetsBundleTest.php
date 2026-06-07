@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gulaandrij\GoogleSheetsBundle\Tests;
 
 use Google\Client as GoogleClient;
+use Google\Service\Drive as GoogleDrive;
 use Google\Service\Sheets as GoogleSheets;
 use Gulaandrij\GoogleSheetsBundle\Exception\MissingCredentialsException;
 use Gulaandrij\GoogleSheetsBundle\GoogleSheetsBundle;
@@ -248,6 +249,17 @@ final class GoogleSheetsBundleTest extends TestCase
         self::assertIsArray($auth);
         self::assertIsArray($auth['auth_config']);
         self::assertSame('service_account', $auth['auth_config']['type']);
+    }
+
+    public function testGoogleDriveServiceIsRegisteredAndAutowireable(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+        ]);
+
+        $container = $kernel->getContainer();
+        self::assertTrue($container->has(GoogleDrive::class));
+        self::assertInstanceOf(GoogleDrive::class, $container->get(GoogleDrive::class));
     }
 
     public function testSheetsClientIsRegisteredAsNonShared(): void

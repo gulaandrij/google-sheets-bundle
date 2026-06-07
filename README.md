@@ -120,17 +120,66 @@ If you need a dynamic spreadsheet ID (only known at runtime), inject `SheetsClie
 
 ### API
 
+`SheetsService` wraps every public method on the underlying `Revolution\Google\Sheets\SheetsClient`, grouped by intent. Every method runs against a fresh `SheetsClient` from the factory so selector state never leaks between calls.
+
+#### Reading
+
 ```php
-SheetsService::readRaw(string $sheetName, ?string $range = null): array
-SheetsService::readAssoc(string $sheetName, ?string $range = null): array
-SheetsService::listSheets(): array
-SheetsService::listSheetsWithIds(): array
+SheetsService::readRaw(string $sheetName, ?string $range = null, ?string $majorDimension = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
+SheetsService::readAssoc(string $sheetName, ?string $range = null, ?string $majorDimension = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
+SheetsService::firstRow(string $sheetName, ?string $range = null, ?string $majorDimension = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
+```
+
+The optional read modifiers map onto the Sheets API's `majorDimension` / `valueRenderOption` / `dateTimeRenderOption` query parameters. Class constants are provided for convenience: `SheetsService::MAJOR_DIMENSION_ROWS|COLUMNS`, `VALUE_RENDER_FORMATTED|UNFORMATTED|FORMULA`, `DATE_TIME_RENDER_SERIAL|FORMATTED`.
+
+#### Writing
+
+```php
 SheetsService::append(string $sheetName, array $rows, string $valueInputOption = 'RAW', string $insertDataOption = 'OVERWRITE'): AppendValuesResponse
 SheetsService::update(string $sheetName, string $range, array $values, string $valueInputOption = 'RAW'): BatchUpdateValuesResponse
 SheetsService::clear(string $sheetName, ?string $range = null): ?ClearValuesResponse
+```
+
+Use the `SheetsService::VALUE_INPUT_RAW` / `VALUE_INPUT_USER_ENTERED` and `INSERT_DATA_OVERWRITE` / `INSERT_DATA_INSERT_ROWS` constants for the option arguments.
+
+#### Tab management
+
+```php
+SheetsService::addSheet(string $title): BatchUpdateSpreadsheetResponse
+SheetsService::deleteSheet(string $title): BatchUpdateSpreadsheetResponse
+```
+
+Both require the `https://www.googleapis.com/auth/spreadsheets` scope.
+
+#### Discovery
+
+```php
+SheetsService::listSheets(): array
+SheetsService::listSheetsWithIds(): array
+SheetsService::findSheetNameById(int $sheetId): ?string
+SheetsService::listSpreadsheets(): array
+```
+
+`listSpreadsheets` is a Drive query — it lists every spreadsheet the credential can see, independent of the bound spreadsheet ID. Requires a Drive read scope.
+
+#### Metadata
+
+```php
+SheetsService::spreadsheetProperties(): object
+SheetsService::sheetProperties(string $sheetName): object
+```
+
+Returned objects mirror the Sheets API's `SpreadsheetProperties` / `SheetProperties` resources (`title`, `locale`, `timeZone`, `gridProperties`, etc.).
+
+#### Escape hatches
+
+```php
 SheetsService::client(): SheetsClient
+SheetsService::driveService(): \Google\Service\Drive
 SheetsService::getSpreadsheetId(): string
 ```
+
+`client()` returns a brand-new `SheetsClient` per call; `driveService()` returns the shared `Google\Service\Drive` instance for Drive-level operations not covered by this service.
 
 - `readRaw` returns each row as a positional array (`list<list<mixed>>`).
 - `readAssoc` treats the first row as the header and yields associative rows. Short rows are padded with empty strings; overflow cells beyond the header are discarded. Duplicate header values throw `DuplicateHeaderException`; non-scalar header cells throw `InvalidHeaderException` — fall back to `readRaw` for non-conforming sheets.

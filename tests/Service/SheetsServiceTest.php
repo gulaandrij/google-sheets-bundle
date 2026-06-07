@@ -301,6 +301,152 @@ final class SheetsServiceTest extends TestCase
         self::assertSame($clientB, $service->client());
     }
 
+    public function testReadRawForwardsAllReadOptions(): void
+    {
+        $client = $this->createMock(SheetsClient::class);
+        $client->method('spreadsheet')->willReturnSelf();
+        $client->method('sheet')->willReturnSelf();
+        $client->expects(self::once())->method('range')->with('A1:Z')->willReturnSelf();
+        $client->expects(self::once())->method('majorDimension')->with(SheetsService::MAJOR_DIMENSION_COLUMNS)->willReturnSelf();
+        $client->expects(self::once())->method('valueRenderOption')->with(SheetsService::VALUE_RENDER_UNFORMATTED)->willReturnSelf();
+        $client->expects(self::once())->method('dateTimeRenderOption')->with(SheetsService::DATE_TIME_RENDER_FORMATTED)->willReturnSelf();
+        $client->expects(self::once())->method('all')->willReturn([]);
+
+        $service = $this->serviceWithClients($client);
+
+        $service->readRaw(
+            'tab',
+            range: 'A1:Z',
+            majorDimension: SheetsService::MAJOR_DIMENSION_COLUMNS,
+            valueRenderOption: SheetsService::VALUE_RENDER_UNFORMATTED,
+            dateTimeRenderOption: SheetsService::DATE_TIME_RENDER_FORMATTED,
+        );
+    }
+
+    public function testFirstRowReturnsFirstValue(): void
+    {
+        $client = $this->createMock(SheetsClient::class);
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
+        $client->expects(self::once())->method('sheet')->with('tab')->willReturnSelf();
+        $client->expects(self::once())->method('first')->willReturn(['Name', 'Email']);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame(['Name', 'Email'], $service->firstRow('tab'));
+    }
+
+    public function testFirstRowAppliesReadOptions(): void
+    {
+        $client = $this->createMock(SheetsClient::class);
+        $client->method('spreadsheet')->willReturnSelf();
+        $client->method('sheet')->willReturnSelf();
+        $client->expects(self::once())->method('range')->with('A1:B1')->willReturnSelf();
+        $client->expects(self::once())->method('valueRenderOption')->with(SheetsService::VALUE_RENDER_FORMULA)->willReturnSelf();
+        $client->expects(self::once())->method('first')->willReturn([]);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame([], $service->firstRow('tab', 'A1:B1', valueRenderOption: SheetsService::VALUE_RENDER_FORMULA));
+    }
+
+    public function testAddSheetCreatesNewTab(): void
+    {
+        $response = $this->createMock(\Google\Service\Sheets\BatchUpdateSpreadsheetResponse::class);
+
+        $client = $this->createMock(SheetsClient::class);
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
+        $client->expects(self::once())->method('addSheet')->with('Archive')->willReturn($response);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame($response, $service->addSheet('Archive'));
+    }
+
+    public function testDeleteSheetRemovesTab(): void
+    {
+        $response = $this->createMock(\Google\Service\Sheets\BatchUpdateSpreadsheetResponse::class);
+
+        $client = $this->createMock(SheetsClient::class);
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
+        $client->expects(self::once())->method('deleteSheet')->with('Old')->willReturn($response);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame($response, $service->deleteSheet('Old'));
+    }
+
+    public function testFindSheetNameByIdResolvesAgainstSheetList(): void
+    {
+        $client = $this->createMock(SheetsClient::class);
+        $client->method('spreadsheet')->willReturnSelf();
+        $client->method('sheetList')->willReturn([101 => 'Allocators', 837423919 => 'Archive']);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame('Archive', $service->findSheetNameById(837423919));
+    }
+
+    public function testFindSheetNameByIdReturnsNullForUnknownId(): void
+    {
+        $client = $this->createMock(SheetsClient::class);
+        $client->method('spreadsheet')->willReturnSelf();
+        $client->method('sheetList')->willReturn([101 => 'Allocators']);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertNull($service->findSheetNameById(999));
+    }
+
+    public function testListSpreadsheetsForwardsToDriveQuery(): void
+    {
+        $client = $this->createMock(SheetsClient::class);
+        $client->expects(self::never())->method('spreadsheet'); // global Drive call ignores bound id
+        $client->expects(self::once())->method('spreadsheetList')->willReturn(['fileA' => 'Allocators', 'fileB' => 'Reports']);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame(['fileA' => 'Allocators', 'fileB' => 'Reports'], $service->listSpreadsheets());
+    }
+
+    public function testSpreadsheetPropertiesForwardsToTheClient(): void
+    {
+        $properties = (object) ['title' => 'My Spreadsheet', 'locale' => 'en_US'];
+
+        $client = $this->createMock(SheetsClient::class);
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
+        $client->expects(self::once())->method('spreadsheetProperties')->willReturn($properties);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame($properties, $service->spreadsheetProperties());
+    }
+
+    public function testSheetPropertiesForwardsToTheClient(): void
+    {
+        $properties = (object) ['title' => 'Allocators', 'index' => 0];
+
+        $client = $this->createMock(SheetsClient::class);
+        $client->expects(self::once())->method('spreadsheet')->with(self::SHEET_ID)->willReturnSelf();
+        $client->expects(self::once())->method('sheet')->with('Allocators')->willReturnSelf();
+        $client->expects(self::once())->method('sheetProperties')->willReturn($properties);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame($properties, $service->sheetProperties('Allocators'));
+    }
+
+    public function testDriveServiceReturnsTheUnderlyingDriveInstance(): void
+    {
+        $drive = $this->createMock(\Google\Service\Drive::class);
+
+        $client = $this->createMock(SheetsClient::class);
+        $client->expects(self::once())->method('getDriveService')->willReturn($drive);
+
+        $service = $this->serviceWithClients($client);
+
+        self::assertSame($drive, $service->driveService());
+    }
+
     /**
      * @param list<list<mixed>> $rows
      */

@@ -143,6 +143,60 @@ $this->reports->append('Stats', [
 
 Default is `'RAW'`, which writes everything as a literal string.
 
+## Archive a tab and create a fresh one
+
+Useful for nightly imports where you want yesterday's tab preserved:
+
+```php
+public function rotateAllocators(): void
+{
+    $today = date('Y-m-d');
+    $yesterday = date('Y-m-d', strtotime('-1 day'));
+
+    $this->allocators->addSheet("Allocators $today");
+    // ...write today's rows into the new tab...
+
+    // Optionally clean up older archives
+    foreach ($this->allocators->listSheets() as $title) {
+        if (str_starts_with($title, 'Allocators ') && $title < "Allocators $yesterday") {
+            $this->allocators->deleteSheet($title);
+        }
+    }
+}
+```
+
+Tab CRUD requires the `https://www.googleapis.com/auth/spreadsheets` scope; the read-only default won't be enough.
+
+## Inspect spreadsheet metadata
+
+`spreadsheetProperties()` returns the sheet's top-level metadata (title, locale, timezone). `sheetProperties()` returns per-tab metadata including `gridProperties` (row/column counts):
+
+```php
+$props = $this->allocators->spreadsheetProperties();
+$this->logger->info('Spreadsheet locale', ['locale' => $props->locale, 'timeZone' => $props->timeZone]);
+
+$tab = $this->allocators->sheetProperties('Allocator List');
+$this->logger->info('Allocator List shape', [
+    'rows' => $tab->gridProperties->rowCount,
+    'columns' => $tab->gridProperties->columnCount,
+]);
+```
+
+## Tune read rendering
+
+Sheets returns formatted display values by default. For numerical or formula-based exports you usually want the raw values:
+
+```php
+// Get '1.0099999999999998' instead of '1.01' for cells with floating-point math
+$rows = $this->reports->readRaw('Stats', valueRenderOption: SheetsService::VALUE_RENDER_UNFORMATTED);
+
+// Get the formulas themselves
+$formulas = $this->reports->readRaw('Stats', valueRenderOption: SheetsService::VALUE_RENDER_FORMULA);
+
+// Walk the sheet column-first (returns columns as the outer array)
+$cols = $this->reports->readRaw('Stats', majorDimension: SheetsService::MAJOR_DIMENSION_COLUMNS);
+```
+
 ## Reach for the underlying client
 
 For batch operations, properties, or anything the high-level service doesn't cover:
