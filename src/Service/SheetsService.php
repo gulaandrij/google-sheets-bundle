@@ -411,10 +411,14 @@ final class SheetsService
 
         $firstIsAssoc = $this->isAssoc($rows[0]);
 
-        foreach ($rows as $index => $row) {
-            if ($this->isAssoc($row) !== $firstIsAssoc) {
-                throw MixedRowShapeException::atIndex($index, $firstIsAssoc);
-            }
+        // array_find_key is PHP 8.4; polyfilled via symfony/polyfill-php84 for 8.3 hosts.
+        $mismatch = array_find_key(
+            $rows,
+            fn (array $row): bool => $this->isAssoc($row) !== $firstIsAssoc,
+        );
+
+        if (null !== $mismatch) {
+            throw MixedRowShapeException::atIndex($mismatch, $firstIsAssoc);
         }
     }
 
