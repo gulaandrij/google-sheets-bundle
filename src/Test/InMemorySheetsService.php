@@ -47,14 +47,23 @@ final class InMemorySheetsService extends SheetsService
     private array $sheets;
 
     /**
+     * @var array<int, string> Stable sheetId → title map (or empty for positional fallback)
+     */
+    private array $sheetIds;
+
+    /**
      * @param array<string, SheetData> $sheets        seed data — `sheetName => rows` where the first row is the header
      * @param string                   $spreadsheetId synthetic spreadsheet ID returned by getSpreadsheetId()
      * @param string|null              $boundSheet    optional bound sheet, mirroring `SheetsService::getBoundSheet()`
+     * @param array<int, string>       $sheetIds      optional `sheetId => title` map for tests that exercise stable-ID
+     *                                                lookups (real Google sheets use random ints, not positional indices);
+     *                                                if omitted, listSheetsWithIds/findSheetNameById fall back to positional indices
      */
     public function __construct(
         array $sheets = [],
         string $spreadsheetId = 'in-memory',
         ?string $boundSheet = null,
+        array $sheetIds = [],
     ) {
         // Build a real SheetsClientFactory pointing at fresh, un-authenticated
         // Google services. None of the overridden methods reach into it — the
@@ -69,6 +78,7 @@ final class InMemorySheetsService extends SheetsService
         parent::__construct($factory, $spreadsheetId, $boundSheet, null);
 
         $this->sheets = $sheets;
+        $this->sheetIds = $sheetIds;
     }
 
     /**
@@ -179,6 +189,10 @@ final class InMemorySheetsService extends SheetsService
 
     public function listSheetsWithIds(): array
     {
+        if ([] !== $this->sheetIds) {
+            return $this->sheetIds;
+        }
+
         $map = [];
         $i = 0;
         foreach (array_keys($this->sheets) as $name) {

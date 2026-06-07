@@ -135,6 +135,19 @@ class SheetsService
         ?string $valueRenderOption = null,
         ?string $dateTimeRenderOption = null,
     ): array {
+        return $this->doReadAssoc($sheetName, $range, $majorDimension, $valueRenderOption, $dateTimeRenderOption);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function doReadAssoc(
+        ?string $sheetName,
+        ?string $range,
+        ?string $majorDimension,
+        ?string $valueRenderOption,
+        ?string $dateTimeRenderOption,
+    ): array {
         // Call the private helper directly so a TraceableSheetsService subclass
         // doesn't double-record (readAssoc + the inner readRaw).
         $rows = $this->doReadRaw($sheetName, $range, $majorDimension, $valueRenderOption, $dateTimeRenderOption);
@@ -188,7 +201,9 @@ class SheetsService
             throw new LogicException('readEntities() requires symfony/serializer. Enable it in framework.serializer or pass a DenormalizerInterface to SheetsService.');
         }
 
-        $rows = $this->readAssoc($sheetName, $range);
+        // Call the private helper directly so a TraceableSheetsService subclass
+        // doesn't double-record (readEntities + the inner readAssoc).
+        $rows = $this->doReadAssoc($sheetName, $range, null, null, null);
         $columnMap = $this->buildColumnMap($className);
 
         $result = [];
@@ -637,14 +652,24 @@ class SheetsService
 
     /**
      * Build a `sheetHeader => propertyName` rewrite map for a target class by
-     * inspecting `#[SheetColumn]` attributes on its properties.
+     * inspecting `#[SheetColumn]` attributes on its properties. Memoised per
+     * class to avoid repeated reflection on large imports.
      *
+     * @var array<class-string, array<string, string>>
+     */
+    private static array $columnMapCache = [];
+
+    /**
      * @param class-string $className
      *
      * @return array<string, string>
      */
     private function buildColumnMap(string $className): array
     {
+        if (isset(self::$columnMapCache[$className])) {
+            return self::$columnMapCache[$className];
+        }
+
         $map = [];
         $reflection = new ReflectionClass($className);
         foreach ($reflection->getProperties() as $property) {
@@ -655,6 +680,6 @@ class SheetsService
             }
         }
 
-        return $map;
+        return self::$columnMapCache[$className] = $map;
     }
 }

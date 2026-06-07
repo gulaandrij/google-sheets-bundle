@@ -31,7 +31,8 @@ final class PeekCommand extends Command
             ->addArgument('binding', InputArgument::REQUIRED, 'Spreadsheet binding name.')
             ->addArgument('sheet', InputArgument::OPTIONAL, 'Sheet/tab name (defaults to the binding\'s bound sheet).')
             ->addOption('rows', null, InputOption::VALUE_REQUIRED, 'Max rows to display.', '10')
-            ->addOption('range', null, InputOption::VALUE_REQUIRED, 'A1-notation range to fetch (e.g. A1:Z20).')
+            ->addOption('range', null, InputOption::VALUE_REQUIRED, 'A1-notation range to fetch (e.g. A1:Z20). When set, the first row of the range is shown as data, not the header — pass --with-header if your range happens to start at the actual header row.')
+            ->addOption('with-header', null, InputOption::VALUE_NONE, 'Force header parsing even when --range is set (use when your range includes the header row).')
         ;
     }
 
@@ -71,11 +72,26 @@ final class PeekCommand extends Command
             return Command::SUCCESS;
         }
 
-        $header = array_map(
-            static fn (mixed $v): string => is_scalar($v) ? (string) $v : '?',
-            $rows[0],
-        );
-        $body = array_slice($rows, 1, $rowsLimit);
+        // When --range is set the user usually wants to see ALL rows in the
+        // range, not skip the first one assuming it's a header — only the A1
+        // (or whole-sheet) read gets the auto-header behaviour. The
+        // --with-header flag opts back in when the range happens to include
+        // the real header row.
+        $stripHeader = null === $rangeStr || true === $input->getOption('with-header');
+        if ($stripHeader) {
+            $header = array_map(
+                static fn (mixed $v): string => is_scalar($v) ? (string) $v : '?',
+                $rows[0],
+            );
+            $body = array_slice($rows, 1, $rowsLimit);
+        } else {
+            $columnCount = count($rows[0]);
+            $header = array_map(
+                static fn (int $i): string => self::columnLetter($i + 1),
+                range(0, $columnCount - 1),
+            );
+            $body = array_slice($rows, 0, $rowsLimit);
+        }
         $stringify = static function (mixed $v): string {
             if (null === $v) {
                 return '';
@@ -102,5 +118,22 @@ final class PeekCommand extends Command
         $io->table($header, $bodyAsStrings);
 
         return Command::SUCCESS;
+    }
+
+    /**
+     * Convert a 1-based column index into A1-notation column letters
+     * (1 → A, 27 → AA). Mirrors SheetsService::columnLetter() but kept
+     * local to keep that helper private.
+     */
+    private static function columnLetter(int $columnIndex): string
+    {
+        $letters = '';
+        while ($columnIndex > 0) {
+            $columnIndex--;
+            $letters = chr(65 + ($columnIndex % 26)).$letters;
+            $columnIndex = intdiv($columnIndex, 26);
+        }
+
+        return $letters;
     }
 }

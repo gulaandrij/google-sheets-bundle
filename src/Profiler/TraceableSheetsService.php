@@ -72,6 +72,70 @@ final class TraceableSheetsService extends SheetsService
         );
     }
 
+    public function readEntities(
+        string $className,
+        ?string $sheetName = null,
+        ?string $range = null,
+    ): array {
+        return $this->trace(
+            sprintf('readEntities<%s>', $this->shortClassName($className)),
+            ['sheet' => $sheetName ?? $this->getBoundSheet(), 'range' => $range],
+            fn (): array => parent::readEntities($className, $sheetName, $range),
+        );
+    }
+
+    public function readAssocIterable(
+        ?string $sheetName = null,
+        int $batchSize = 500,
+    ): \Generator {
+        // Generators don't compose cleanly with trace() because the work
+        // happens lazily as the caller pulls. Time the whole stream up to
+        // exhaustion and emit one trace entry on completion.
+        $origin = $this->captureOrigin();
+        $start = microtime(true);
+        $count = 0;
+        try {
+            foreach (parent::readAssocIterable($sheetName, $batchSize) as $row) {
+                ++$count;
+                yield $row;
+            }
+            $this->recordIterableCompletion($sheetName, $batchSize, $count, $origin, $start);
+        } catch (Throwable $e) {
+            $this->recordIterableCompletion($sheetName, $batchSize, $count, $origin, $start, $e);
+
+            throw $e;
+        }
+    }
+
+    private function recordIterableCompletion(
+        ?string $sheetName,
+        int $batchSize,
+        int $count,
+        ?string $origin,
+        float $start,
+        ?Throwable $error = null,
+    ): void {
+        $this->collector->record(
+            $this->serviceName,
+            sprintf('readAssocIterable(batchSize=%d, yielded=%d)', $batchSize, $count),
+            [
+                'spreadsheet_id' => $this->getSpreadsheetId(),
+                'sheet' => $sheetName ?? $this->getBoundSheet(),
+                'range' => null,
+                'origin' => $origin,
+            ],
+            (microtime(true) - $start) * 1000.0,
+            $error,
+        );
+    }
+
+    private function shortClassName(string $className): string
+    {
+        $pos = strrpos($className, '\\');
+
+        return false === $pos ? $className : substr($className, $pos + 1);
+    }
+
     public function append(
         array $rows,
         ?string $sheetName = null,
@@ -195,15 +259,19 @@ final class TraceableSheetsService extends SheetsService
     }
 
     /**
-     * Walk the stack until the first frame outside the bundle's namespace —
+     * Walk the stack until the first frame that isn't bundle plumbing —
      * that's the call site the user actually wants to see in the profiler.
+     * Only the bundle's own runtime classes (Service + Profiler namespaces)
+     * are filtered out; consumer code in `…\Tests\…` namespaces still counts
+     * as a legitimate origin so the bundle's own test suite can verify the
+     * captured frame.
      */
     private function captureOrigin(): ?string
     {
-        $frames = debug_backtrace(\DEBUG_BACKTRACE_IGNORE_ARGS, 8);
+        $frames = debug_backtrace(\DEBUG_BACKTRACE_IGNORE_ARGS, 12);
         foreach ($frames as $frame) {
             $class = $frame['class'] ?? '';
-            if ('' !== $class && str_starts_with($class, 'Gulaandrij\\GoogleSheetsBundle\\')) {
+            if (self::isBundleRuntimeClass($class)) {
                 continue;
             }
             if (!isset($frame['file'], $frame['line'])) {
@@ -214,5 +282,11 @@ final class TraceableSheetsService extends SheetsService
         }
 
         return null;
+    }
+
+    private static function isBundleRuntimeClass(string $class): bool
+    {
+        return str_starts_with($class, 'Gulaandrij\\GoogleSheetsBundle\\Profiler\\')
+            || str_starts_with($class, 'Gulaandrij\\GoogleSheetsBundle\\Service\\');
     }
 }

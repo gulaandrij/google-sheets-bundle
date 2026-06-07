@@ -8,6 +8,7 @@ use Gulaandrij\GoogleSheetsBundle\Service\SheetsRegistry;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Throwable;
@@ -23,9 +24,20 @@ final class DoctorCommand extends Command
         parent::__construct();
     }
 
+    protected function configure(): void
+    {
+        $this->addOption(
+            'strict',
+            null,
+            InputOption::VALUE_NONE,
+            'Treat a missing bound sheet as a failure (default: warning). Use in deploy pipelines that expect every configured tab to already exist.',
+        );
+    }
+
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
+        $strict = true === $input->getOption('strict');
 
         $names = $this->registry->names();
         if ([] === $names) {
@@ -36,7 +48,8 @@ final class DoctorCommand extends Command
 
         $io->title('Probing each binding…');
 
-        $allOk = true;
+        $hardFailure = false;
+        $missingSheets = false;
         $rows = [];
 
         foreach ($names as $name) {
@@ -49,16 +62,18 @@ final class DoctorCommand extends Command
                 $boundSheet = $meta['sheet'];
                 $boundOk = null === $boundSheet || in_array($boundSheet, $tabs, true);
 
-                $status = $boundOk ? '<info>OK</info>' : '<comment>BOUND-SHEET-MISSING</comment>';
-                $detail = sprintf('%d tab(s) reachable', count($tabs));
-                if (!$boundOk) {
-                    $detail .= sprintf('; bound sheet "%s" not found', $boundSheet);
-                    $allOk = false;
+                if ($boundOk) {
+                    $status = '<info>OK</info>';
+                    $detail = sprintf('%d tab(s) reachable', count($tabs));
+                } else {
+                    $missingSheets = true;
+                    $status = '<comment>BOUND-SHEET-MISSING</comment>';
+                    $detail = sprintf('%d tab(s) reachable; bound sheet "%s" not found', count($tabs), $boundSheet);
                 }
             } catch (Throwable $e) {
+                $hardFailure = true;
                 $status = '<error>FAIL</error>';
                 $detail = sprintf('%s: %s', $e::class, $e->getMessage());
-                $allOk = false;
             }
 
             $durationMs = (microtime(true) - $start) * 1000.0;
@@ -78,14 +93,25 @@ final class DoctorCommand extends Command
             $rows,
         );
 
-        if ($allOk) {
-            $io->success('All bindings reachable.');
+        if ($hardFailure) {
+            $io->error('One or more bindings failed to reach the API. See detail column above.');
+
+            return Command::FAILURE;
+        }
+
+        if ($missingSheets) {
+            if ($strict) {
+                $io->error('One or more bindings reference a sheet that does not exist (--strict).');
+
+                return Command::FAILURE;
+            }
+            $io->warning('Some bound sheets do not exist yet. Pass --strict to fail the command on this condition.');
 
             return Command::SUCCESS;
         }
 
-        $io->error('One or more bindings failed. See detail column above.');
+        $io->success('All bindings reachable.');
 
-        return Command::FAILURE;
+        return Command::SUCCESS;
     }
 }

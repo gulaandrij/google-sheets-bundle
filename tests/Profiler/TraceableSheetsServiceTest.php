@@ -77,6 +77,84 @@ final class TraceableSheetsServiceTest extends TestCase
         );
     }
 
+    public function testReadEntitiesRecordsAsItsOwnEntry(): void
+    {
+        $collector = new SheetsCollector();
+
+        $client = $this->createMock(SheetsClient::class);
+        $client->method('spreadsheet')->willReturnSelf();
+        $client->method('sheet')->willReturnSelf();
+        $client->method('all')->willReturn([
+            ['Record ID - Contact', 'First Name', 'Email'],
+            ['c-1', 'Alice', 'alice@example.com'],
+        ]);
+
+        $factory = $this->createMock(SheetsClientFactory::class);
+        $factory->method('create')->willReturn($client);
+
+        $denormalizer = new \Symfony\Component\Serializer\Serializer(
+            [new \Symfony\Component\Serializer\Normalizer\ObjectNormalizer()],
+        );
+
+        $service = new TraceableSheetsService(
+            $factory,
+            'SHEET_ID',
+            'BoundTab',
+            $denormalizer,
+            $collector,
+            'allocators',
+        );
+
+        $service->readEntities(\Gulaandrij\GoogleSheetsBundle\Tests\Fixtures\PersonDto::class);
+
+        $methods = array_map(static fn (array $call): string => $call['method'], $collector->getCalls());
+        // readEntities surfaces as its own call (with the DTO short name);
+        // the inner readAssoc is NOT separately recorded (it's part of the
+        // readEntities work).
+        self::assertContains('readEntities<PersonDto>', $methods);
+        self::assertNotContains('readAssoc', $methods, 'inner readAssoc should not produce a separate trace entry');
+    }
+
+    public function testReadAssocIterableRecordsOneEntryOnCompletion(): void
+    {
+        $collector = new SheetsCollector();
+
+        $client = $this->createMock(SheetsClient::class);
+        $client->method('spreadsheet')->willReturnSelf();
+        $client->method('sheet')->willReturnSelf();
+        $client->method('range')->willReturnSelf();
+        $client->method('first')->willReturn(['Name', 'Email']);
+        $callCount = 0;
+        $client->method('all')->willReturnCallback(function () use (&$callCount): array {
+            ++$callCount;
+            if (1 === $callCount) {
+                return [['Alice', 'a@x'], ['Bob', 'b@x']];
+            }
+
+            return [];
+        });
+
+        $factory = $this->createMock(SheetsClientFactory::class);
+        $factory->method('create')->willReturn($client);
+
+        $service = new TraceableSheetsService(
+            $factory,
+            'SHEET_ID',
+            'BoundTab',
+            null,
+            $collector,
+            'reports',
+        );
+
+        $rows = iterator_to_array($service->readAssocIterable(batchSize: 500), false);
+        self::assertCount(2, $rows);
+
+        $calls = $collector->getCalls();
+        self::assertCount(1, $calls);
+        self::assertStringStartsWith('readAssocIterable(', $calls[0]['method']);
+        self::assertStringContainsString('yielded=2', $calls[0]['method']);
+    }
+
     public function testListSheetsRecordsWithoutSheet(): void
     {
         $collector = new SheetsCollector();

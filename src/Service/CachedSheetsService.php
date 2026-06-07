@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace Gulaandrij\GoogleSheetsBundle\Service;
 
+use Google\Service\Sheets\AppendValuesResponse;
+use Google\Service\Sheets\BatchUpdateSpreadsheetResponse;
+use Google\Service\Sheets\BatchUpdateValuesResponse;
+use Google\Service\Sheets\ClearValuesResponse;
+use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 use Symfony\Contracts\Cache\CacheInterface;
 use Symfony\Contracts\Cache\ItemInterface;
 
@@ -16,6 +21,13 @@ use Symfony\Contracts\Cache\ItemInterface;
  */
 final class CachedSheetsService extends SheetsService
 {
+    /**
+     * @var array<string, true>  Cache keys this instance has populated — used
+     *                           to drop reads when the same service writes,
+     *                           without depending on a tag-aware cache pool.
+     */
+    private array $populatedKeys = [];
+
     public function __construct(
         SheetsClientFactory $factory,
         string $spreadsheetId,
@@ -23,8 +35,9 @@ final class CachedSheetsService extends SheetsService
         private readonly CacheInterface $cache,
         private readonly int $ttlSeconds,
         private readonly string $serviceName,
+        ?DenormalizerInterface $denormalizer = null,
     ) {
-        parent::__construct($factory, $spreadsheetId, $boundSheet);
+        parent::__construct($factory, $spreadsheetId, $boundSheet, $denormalizer);
     }
 
     public function readRaw(
@@ -92,6 +105,78 @@ final class CachedSheetsService extends SheetsService
         );
     }
 
+    // ------------------------------------------------------------------
+    // Writes — pass through to the underlying service, then invalidate
+    // every key this instance populated so the next read goes to Google.
+    // ------------------------------------------------------------------
+
+    public function append(
+        array $rows,
+        ?string $sheetName = null,
+        string $valueInputOption = self::VALUE_INPUT_RAW,
+        string $insertDataOption = self::INSERT_DATA_OVERWRITE,
+    ): AppendValuesResponse {
+        try {
+            return parent::append($rows, $sheetName, $valueInputOption, $insertDataOption);
+        } finally {
+            $this->invalidate();
+        }
+    }
+
+    public function update(
+        string $range,
+        array $values,
+        ?string $sheetName = null,
+        string $valueInputOption = self::VALUE_INPUT_RAW,
+    ): BatchUpdateValuesResponse {
+        try {
+            return parent::update($range, $values, $sheetName, $valueInputOption);
+        } finally {
+            $this->invalidate();
+        }
+    }
+
+    public function clear(?string $sheetName = null, ?string $range = null): ?ClearValuesResponse
+    {
+        try {
+            return parent::clear($sheetName, $range);
+        } finally {
+            $this->invalidate();
+        }
+    }
+
+    public function addSheet(string $title): BatchUpdateSpreadsheetResponse
+    {
+        try {
+            return parent::addSheet($title);
+        } finally {
+            $this->invalidate();
+        }
+    }
+
+    public function deleteSheet(string $title): BatchUpdateSpreadsheetResponse
+    {
+        try {
+            return parent::deleteSheet($title);
+        } finally {
+            $this->invalidate();
+        }
+    }
+
+    /**
+     * Drop every cached entry this instance produced.
+     */
+    public function invalidate(): void
+    {
+        if ([] === $this->populatedKeys) {
+            return;
+        }
+        foreach (array_keys($this->populatedKeys) as $key) {
+            $this->cache->delete($key);
+        }
+        $this->populatedKeys = [];
+    }
+
     /**
      * @template T
      *
@@ -103,6 +188,7 @@ final class CachedSheetsService extends SheetsService
     private function cached(string $method, array $args, callable $fn): mixed
     {
         $key = $this->cacheKey($method, $args);
+        $this->populatedKeys[$key] = true;
 
         return $this->cache->get($key, function (ItemInterface $item) use ($fn): mixed {
             $item->expiresAfter($this->ttlSeconds);

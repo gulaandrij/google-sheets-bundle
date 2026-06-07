@@ -302,6 +302,26 @@ final class GoogleSheetsBundleTest extends TestCase
         self::assertSame('service_account', $auth['auth_config']['type']);
     }
 
+    public function testInvalidCachePoolReferenceFailsAtBootWithBundleScopedError(): void
+    {
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessageMatches('/cache\.pool refers to service "missing\.pool"/');
+
+        $this->bootKernel(
+            [
+                'auth' => ['api_key' => 'test-key'],
+                'spreadsheets' => [
+                    'allocators' => [
+                        'id' => '1abc',
+                        'sheet' => 'List',
+                        'cache' => ['ttl' => 60, 'pool' => 'missing.pool'],
+                    ],
+                ],
+            ],
+            debug: false,
+        );
+    }
+
     public function testGoogleDriveServiceIsRegisteredAndAutowireable(): void
     {
         $kernel = $this->bootKernel([

@@ -252,6 +252,15 @@ final class GoogleSheetsBundle extends AbstractBundle
                     ->public()
                 ;
             } elseif (null !== $cache) {
+                if (!$builder->has($cache['pool'])) {
+                    throw new LogicException(sprintf(
+                        'google_sheets.spreadsheets["%s"].cache.pool refers to service "%s", which is not registered. '
+                        .'Configure it via framework.cache.pools.%s, or use the default "cache.app" (enabled by FrameworkBundle).',
+                        $name,
+                        $cache['pool'],
+                        $cache['pool'],
+                    ));
+                }
                 $services
                     ->set($serviceId, CachedSheetsService::class)
                     ->args([
@@ -261,6 +270,7 @@ final class GoogleSheetsBundle extends AbstractBundle
                         service($cache['pool']),
                         $cache['ttl'],
                         $name,
+                        $denormalizer,
                     ])
                     ->public()
                 ;

@@ -107,6 +107,24 @@ final class InMemorySheetsServiceTest extends TestCase
         self::assertNull($service->findSheetNameById(99));
     }
 
+    public function testExplicitSheetIdMapBeatsPositionalFallback(): void
+    {
+        $service = new InMemorySheetsService(
+            sheets: [
+                'Allocators' => [],
+                'Archive' => [],
+            ],
+            sheetIds: [
+                101 => 'Allocators',
+                837423919 => 'Archive',
+            ],
+        );
+
+        self::assertSame([101 => 'Allocators', 837423919 => 'Archive'], $service->listSheetsWithIds());
+        self::assertSame('Archive', $service->findSheetNameById(837423919));
+        self::assertNull($service->findSheetNameById(0)); // positional index ignored when map is set
+    }
+
     public function testGetSpreadsheetIdAndBoundSheetExposeConstructorValues(): void
     {
         $service = new InMemorySheetsService(spreadsheetId: 'fake-id', boundSheet: 'Tab');
