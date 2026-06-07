@@ -1,6 +1,6 @@
 # Recipes
 
-Common patterns for using `SheetsService` in real applications. The bundle binds one `SheetsService` instance per named spreadsheet declared under `google_sheets.spreadsheets`, so all snippets below show injection by variable name:
+Common patterns for using `SheetsService` in real applications. The bundle binds one `SheetsService` instance per named entry under `google_sheets.spreadsheets` — each instance is fixed to one spreadsheet ID and (optionally) one default tab. Inject by variable name:
 
 ```php
 public function __construct(
@@ -9,7 +9,9 @@ public function __construct(
 ) {}
 ```
 
-If you have only one spreadsheet, you can also `__construct(SheetsService $sheets)` — the bare alias points at your `default_spreadsheet`.
+If you have only one spreadsheet, `__construct(SheetsService $sheets)` also works — the bare alias points at your `default_spreadsheet`.
+
+All call snippets below assume the matching binding has `sheet:` set in config. To target a different tab on the same spreadsheet, pass an explicit `$sheetName` argument.
 
 ## Import a sheet as typed objects
 
@@ -21,7 +23,7 @@ use Symfony\Component\Serializer\SerializerInterface;
 
 public function importAllocators(): void
 {
-    $rows = $this->allocators->readAssoc('Allocator List');
+    $rows = $this->allocators->readAssoc();
     /** @var Allocator[] $allocators */
     $allocators = $this->serializer->denormalize($rows, Allocator::class.'[]');
 
@@ -32,16 +34,14 @@ public function importAllocators(): void
 }
 ```
 
-If your header has friendly names like `"Record ID - Contact"` that don't map to DTO property names, use the serializer's `name_converter` or `#[SerializedName]` attribute on the DTO.
-
 ## Sync new records up to a sheet
 
-Append rows that aren't already present. The associative form lets you write the column-to-value mapping inline:
+Append rows that aren't already present:
 
 ```php
 public function syncToSheet(): void
 {
-    $existing = $this->allocators->readAssoc('Allocator List');
+    $existing = $this->allocators->readAssoc();
     $existingIds = array_column($existing, 'Record ID - Contact');
 
     $newRows = array_filter(
@@ -53,7 +53,7 @@ public function syncToSheet(): void
         return;
     }
 
-    $this->allocators->append('Allocator List', array_map(
+    $this->allocators->append(array_map(
         static fn (Allocator $a): array => [
             'Record ID - Contact' => $a->getId(),
             'First Name' => $a->getFirstName(),
@@ -65,11 +65,11 @@ public function syncToSheet(): void
 }
 ```
 
-The underlying client reorders associative rows to match the sheet header. Just make sure every row has the same shape — `MixedRowShapeException` fires immediately if some rows are positional.
+All associative rows must share the same key set — divergent keys throw `MixedRowShapeException`, preventing silent data loss when the underlying client maps keys to the sheet header.
 
 ## Schedule a nightly export
 
-Pair with Symfony Scheduler. A command annotated with `#[AsCronTask]` runs on a cron expression and stays out of the request lifecycle. This composes nicely with the bundle because `SheetsService` is a regular autowired service.
+Pair with Symfony Scheduler:
 
 ```php
 #[AsCommand(name: 'app:sheets:nightly-export')]
@@ -83,14 +83,48 @@ final class NightlyExportCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $rows = $this->buildExportRows();
-        $this->reports->clear('Daily Export');
-        $this->reports->update('Daily Export', 'A1', $rows);
+        $this->reports->clear();
+        $this->reports->update('A1', $rows);
         return Command::SUCCESS;
     }
 }
 ```
 
-Pair with Sentry check-ins if you want monitoring (see your project's `CLAUDE.md` for the exact pattern your codebase uses).
+## Talk to several tabs from one spreadsheet
+
+If your spreadsheet has multiple tabs you read from regularly, declare separate bindings:
+
+```yaml
+spreadsheets:
+    allocators_list:
+        id: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
+        sheet: 'Allocator List'
+    allocators_archive:
+        id: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'  # same ID, different tab
+        sheet: 'Archive'
+default_spreadsheet: allocators_list
+```
+
+```php
+public function __construct(
+    private readonly SheetsService $allocatorsList,
+    private readonly SheetsService $allocatorsArchive,
+) {}
+
+public function moveToArchive(): void
+{
+    $rows = $this->allocatorsList->readAssoc();
+    $this->allocatorsArchive->append($rows);
+    $this->allocatorsList->clear();
+}
+```
+
+Alternatively, omit `sheet:` from the config and pass it at the call site:
+
+```php
+$rows = $this->allocators->readAssoc('Allocator List');
+$this->allocators->append($rows, 'Archive');
+```
 
 ## Look up a tab by ID, not by name
 
@@ -100,21 +134,19 @@ Tab IDs are stable across renames; tab names are not. Use `listSheetsWithIds` to
 $idsToTitles = $this->reports->listSheetsWithIds();
 // [0 => 'Sheet1', 837423919 => 'Archive', ...]
 
-$archiveTitle = $idsToTitles[837423919] ?? null;
+$archiveTitle = $this->reports->findSheetNameById(837423919);
 if (null === $archiveTitle) {
     throw new \RuntimeException('Archive tab missing');
 }
 $rows = $this->reports->readAssoc($archiveTitle);
 ```
 
-If the user renames "Archive" to "Old Records", the sheetId stays `837423919` so your job keeps working.
-
 ## Read a sub-range only
 
 When the sheet is huge but you only care about the first two columns of the first 1,000 rows:
 
 ```php
-$rows = $this->allocators->readRaw('Allocator List', 'A1:B1000');
+$rows = $this->allocators->readRaw(range: 'A1:B1000');
 ```
 
 A1-notation ranges go through unchanged to the Sheets API. Passing just `A2:C` (no row bound) is also valid — Sheets reads to the last filled row in those columns.
@@ -125,20 +157,18 @@ A1-notation ranges go through unchanged to the Sheets API. Passing just `A2:C` (
 
 ```php
 $values = array_map(static fn (int $i): array => [$computed[$i]], range(0, 9));
-$this->allocators->update('Allocator List', 'B2:B11', $values);
+$this->allocators->update('B2:B11', $values);
 ```
-
-Each inner array is one row; one cell per inner array because the range is one column wide.
 
 ## Use Sheets formulas / formatting
 
-`valueInputOption: 'USER_ENTERED'` makes the API interpret strings as the user would type them — so `'=SUM(A2:A10)'` becomes a real formula, `'$1,234'` becomes a currency-formatted number, etc.:
+`valueInputOption: SheetsService::VALUE_INPUT_USER_ENTERED` makes the API interpret strings as the user would type them — so `'=SUM(A2:A10)'` becomes a real formula:
 
 ```php
-$this->reports->append('Stats', [
+$this->reports->append([
     ['Date', 'Total', 'Formula'],
     ['2026-01-01', 1234, '=B2*1.1'],
-], 'USER_ENTERED');
+], valueInputOption: SheetsService::VALUE_INPUT_USER_ENTERED);
 ```
 
 Default is `'RAW'`, which writes everything as a literal string.
@@ -154,9 +184,9 @@ public function rotateAllocators(): void
     $yesterday = date('Y-m-d', strtotime('-1 day'));
 
     $this->allocators->addSheet("Allocators $today");
-    // ...write today's rows into the new tab...
+    // ...write today's rows into the new tab via override...
+    $this->allocators->append($rows, "Allocators $today");
 
-    // Optionally clean up older archives
     foreach ($this->allocators->listSheets() as $title) {
         if (str_starts_with($title, 'Allocators ') && $title < "Allocators $yesterday") {
             $this->allocators->deleteSheet($title);
@@ -169,14 +199,12 @@ Tab CRUD requires the `https://www.googleapis.com/auth/spreadsheets` scope; the 
 
 ## Inspect spreadsheet metadata
 
-`spreadsheetProperties()` returns the sheet's top-level metadata (title, locale, timezone). `sheetProperties()` returns per-tab metadata including `gridProperties` (row/column counts):
-
 ```php
 $props = $this->allocators->spreadsheetProperties();
 $this->logger->info('Spreadsheet locale', ['locale' => $props->locale, 'timeZone' => $props->timeZone]);
 
-$tab = $this->allocators->sheetProperties('Allocator List');
-$this->logger->info('Allocator List shape', [
+$tab = $this->allocators->sheetProperties();
+$this->logger->info('Bound tab shape', [
     'rows' => $tab->gridProperties->rowCount,
     'columns' => $tab->gridProperties->columnCount,
 ]);
@@ -184,17 +212,15 @@ $this->logger->info('Allocator List shape', [
 
 ## Tune read rendering
 
-Sheets returns formatted display values by default. For numerical or formula-based exports you usually want the raw values:
-
 ```php
-// Get '1.0099999999999998' instead of '1.01' for cells with floating-point math
-$rows = $this->reports->readRaw('Stats', valueRenderOption: SheetsService::VALUE_RENDER_UNFORMATTED);
+// Get raw numeric values instead of formatted display strings
+$rows = $this->reports->readRaw(valueRenderOption: SheetsService::VALUE_RENDER_UNFORMATTED);
 
 // Get the formulas themselves
-$formulas = $this->reports->readRaw('Stats', valueRenderOption: SheetsService::VALUE_RENDER_FORMULA);
+$formulas = $this->reports->readRaw(valueRenderOption: SheetsService::VALUE_RENDER_FORMULA);
 
-// Walk the sheet column-first (returns columns as the outer array)
-$cols = $this->reports->readRaw('Stats', majorDimension: SheetsService::MAJOR_DIMENSION_COLUMNS);
+// Walk the sheet column-first
+$cols = $this->reports->readRaw(majorDimension: SheetsService::MAJOR_DIMENSION_COLUMNS);
 ```
 
 ## Reach for the underlying client
@@ -208,9 +234,25 @@ $client->spreadsheet($this->reports->getSpreadsheetId())->addSheet('Imports '.da
 
 Each `client()` call returns a fresh `SheetsClient`. State you set on the returned instance — `valueRenderOption()`, `majorDimension()`, etc. — does not leak to other consumers. See [architecture.md](architecture.md) for why.
 
+## Discover all spreadsheets the credential can see
+
+`listSpreadsheets()` is a global Drive query (not bound to any spreadsheet) — it lives on `SheetsClientFactory`:
+
+```php
+use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
+
+public function __construct(private readonly SheetsClientFactory $factory) {}
+
+public function listAvailable(): array
+{
+    return $this->factory->listSpreadsheets();
+    // ['fileIdA' => 'My Spreadsheet', 'fileIdB' => 'Allocators', ...]
+}
+```
+
 ## Talk to a spreadsheet whose ID is only known at runtime
 
-For dynamic IDs that come from user input, a database row, or per-tenant config, skip the bundle's `spreadsheets` map and inject `SheetsClientFactory` directly:
+For dynamic IDs that come from user input, a database row, or per-tenant config, inject `SheetsClientFactory` and drive the client directly:
 
 ```php
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
@@ -241,7 +283,7 @@ foreach ($query->toIterable() as $i => $allocator) {
         $em->clear(); // flush identity map
     }
 }
-$this->reports->update('Export', 'A1', $rows);
+$this->reports->update('A1', $rows);
 ```
 
 Update sends one batch request, so build the array in memory first and update once instead of appending 10k rows individually.

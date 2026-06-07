@@ -11,11 +11,13 @@ use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
 use Gulaandrij\GoogleSheetsBundle\Exception\DuplicateHeaderException;
 use Gulaandrij\GoogleSheetsBundle\Exception\InvalidHeaderException;
+use Gulaandrij\GoogleSheetsBundle\Exception\MissingSheetNameException;
 use Gulaandrij\GoogleSheetsBundle\Exception\MixedRowShapeException;
 use Revolution\Google\Sheets\SheetsClient;
 
 /**
- * High-level wrapper around `SheetsClient`, bound to a single spreadsheet.
+ * High-level wrapper around `SheetsClient`, bound to a single spreadsheet and
+ * (optionally) a single default sheet/tab.
  *
  * The bundle creates one instance per `google_sheets.spreadsheets.<name>`
  * config entry; inject by variable name (e.g. `SheetsService $allocators`)
@@ -24,20 +26,25 @@ use Revolution\Google\Sheets\SheetsClient;
  * (`range`, `majorDimension`, `valueRenderOption`, `dateTimeRenderOption`)
  * never leak between calls or between consumers.
  *
+ * Methods that operate on a sheet/tab take `?string $sheetName` — pass null
+ * to use the bound default sheet (set via `google_sheets.spreadsheets.<name>.sheet`);
+ * pass a string to target a different tab. If neither is set the method
+ * throws `MissingSheetNameException`.
+ *
  * For dynamic spreadsheet IDs (only known at runtime), inject
  * `SheetsClientFactory` instead and drive the client directly.
  */
 final class SheetsService
 {
-    public const MAJOR_DIMENSION_ROWS = 'ROWS';
-    public const MAJOR_DIMENSION_COLUMNS = 'COLUMNS';
-
     public const VALUE_RENDER_FORMATTED = 'FORMATTED_VALUE';
     public const VALUE_RENDER_UNFORMATTED = 'UNFORMATTED_VALUE';
     public const VALUE_RENDER_FORMULA = 'FORMULA';
 
     public const DATE_TIME_RENDER_SERIAL = 'SERIAL_NUMBER';
     public const DATE_TIME_RENDER_FORMATTED = 'FORMATTED_STRING';
+
+    public const MAJOR_DIMENSION_ROWS = 'ROWS';
+    public const MAJOR_DIMENSION_COLUMNS = 'COLUMNS';
 
     public const VALUE_INPUT_RAW = 'RAW';
     public const VALUE_INPUT_USER_ENTERED = 'USER_ENTERED';
@@ -48,12 +55,18 @@ final class SheetsService
     public function __construct(
         private readonly SheetsClientFactory $factory,
         private readonly string $spreadsheetId,
+        private readonly ?string $boundSheet = null,
     ) {
     }
 
     public function getSpreadsheetId(): string
     {
         return $this->spreadsheetId;
+    }
+
+    public function getBoundSheet(): ?string
+    {
+        return $this->boundSheet;
     }
 
     // ------------------------------------------------------------------
@@ -66,14 +79,14 @@ final class SheetsService
      * @return list<list<mixed>>
      */
     public function readRaw(
-        string $sheetName,
+        ?string $sheetName = null,
         ?string $range = null,
         ?string $majorDimension = null,
         ?string $valueRenderOption = null,
         ?string $dateTimeRenderOption = null,
     ): array {
         $selection = $this->applyReadOptions(
-            $this->factory->create()->spreadsheet($this->spreadsheetId)->sheet($sheetName),
+            $this->factory->create()->spreadsheet($this->spreadsheetId)->sheet($this->resolveSheetName($sheetName)),
             $range,
             $majorDimension,
             $valueRenderOption,
@@ -96,7 +109,7 @@ final class SheetsService
      * @throws InvalidHeaderException   when a header cell is not a scalar/null
      */
     public function readAssoc(
-        string $sheetName,
+        ?string $sheetName = null,
         ?string $range = null,
         ?string $majorDimension = null,
         ?string $valueRenderOption = null,
@@ -130,21 +143,22 @@ final class SheetsService
     }
 
     /**
-     * Read just the first row of a sheet (or sub-range).
+     * Read just the first row of a sheet (or sub-range). `majorDimension` is
+     * deliberately not exposed — under `COLUMNS` it would return the first
+     * column, contradicting the method name.
      *
      * @return list<mixed>
      */
     public function firstRow(
-        string $sheetName,
+        ?string $sheetName = null,
         ?string $range = null,
-        ?string $majorDimension = null,
         ?string $valueRenderOption = null,
         ?string $dateTimeRenderOption = null,
     ): array {
         $selection = $this->applyReadOptions(
-            $this->factory->create()->spreadsheet($this->spreadsheetId)->sheet($sheetName),
+            $this->factory->create()->spreadsheet($this->spreadsheetId)->sheet($this->resolveSheetName($sheetName)),
             $range,
-            $majorDimension,
+            null,
             $valueRenderOption,
             $dateTimeRenderOption,
         );
@@ -163,18 +177,19 @@ final class SheetsService
      * Append rows to the end of a sheet.
      *
      * Rows must all share the same shape: either all positional
-     * (`list<list<mixed>>`) or all associative (`list<array<string,mixed>>`).
-     * Associative rows are reordered to match the sheet header by the
-     * underlying client; mixing shapes silently drops data, so it is rejected
-     * upfront.
+     * (`list<list<mixed>>`) or all associative with identical key sets
+     * (`list<array<string,mixed>>`). Mixed shapes throw
+     * `MixedRowShapeException`; assoc rows with divergent key sets also
+     * throw — the underlying client would silently drop values whose keys
+     * are missing from the first row's header derivation.
      *
      * @param list<array<string, mixed>>|list<list<mixed>> $rows
      *
-     * @throws MixedRowShapeException when $rows mixes positional and associative entries
+     * @throws MixedRowShapeException when $rows mixes shapes or assoc rows have inconsistent keys
      */
     public function append(
-        string $sheetName,
         array $rows,
+        ?string $sheetName = null,
         string $valueInputOption = self::VALUE_INPUT_RAW,
         string $insertDataOption = self::INSERT_DATA_OVERWRITE,
     ): AppendValuesResponse {
@@ -182,7 +197,7 @@ final class SheetsService
 
         return $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
-            ->sheet($sheetName)
+            ->sheet($this->resolveSheetName($sheetName))
             ->append($rows, $valueInputOption, $insertDataOption);
     }
 
@@ -192,14 +207,14 @@ final class SheetsService
      * @param list<list<mixed>> $values
      */
     public function update(
-        string $sheetName,
         string $range,
         array $values,
+        ?string $sheetName = null,
         string $valueInputOption = self::VALUE_INPUT_RAW,
     ): BatchUpdateValuesResponse {
         return $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
-            ->sheet($sheetName)
+            ->sheet($this->resolveSheetName($sheetName))
             ->range($range)
             ->update($values, $valueInputOption);
     }
@@ -207,11 +222,11 @@ final class SheetsService
     /**
      * Clear a range or the whole sheet (when `$range` is null).
      */
-    public function clear(string $sheetName, ?string $range = null): ?ClearValuesResponse
+    public function clear(?string $sheetName = null, ?string $range = null): ?ClearValuesResponse
     {
         $selection = $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
-            ->sheet($sheetName);
+            ->sheet($this->resolveSheetName($sheetName));
 
         if (null !== $range) {
             $selection = $selection->range($range);
@@ -279,24 +294,6 @@ final class SheetsService
         return $this->listSheetsWithIds()[$sheetId] ?? null;
     }
 
-    /**
-     * List every Google Sheets file the credential can see, as a
-     * `fileId => title` map. Requires a Drive read scope on the credential.
-     *
-     * Note: this is a global Drive query — it ignores the bound spreadsheet ID
-     * and lists all spreadsheets visible to the credential. Convenient for
-     * discovery, but cross-cuts the per-spreadsheet binding.
-     *
-     * @return array<string, string>
-     */
-    public function listSpreadsheets(): array
-    {
-        /** @var array<string, string> $list */
-        $list = $this->factory->create()->spreadsheetList();
-
-        return $list;
-    }
-
     // ------------------------------------------------------------------
     // Metadata
     // ------------------------------------------------------------------
@@ -314,11 +311,11 @@ final class SheetsService
     /**
      * Get metadata about a single tab (gridProperties, index, sheetType, etc.).
      */
-    public function sheetProperties(string $sheetName): object
+    public function sheetProperties(?string $sheetName = null): object
     {
         return $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
-            ->sheet($sheetName)
+            ->sheet($this->resolveSheetName($sheetName))
             ->sheetProperties();
     }
 
@@ -349,6 +346,19 @@ final class SheetsService
     // ------------------------------------------------------------------
     // Internals
     // ------------------------------------------------------------------
+
+    /**
+     * @throws MissingSheetNameException
+     */
+    private function resolveSheetName(?string $explicit): string
+    {
+        $sheet = $explicit ?? $this->boundSheet;
+        if (null === $sheet) {
+            throw MissingSheetNameException::create();
+        }
+
+        return $sheet;
+    }
 
     private function applyReadOptions(
         SheetsClient $selection,
@@ -411,14 +421,39 @@ final class SheetsService
 
         $firstIsAssoc = $this->isAssoc($rows[0]);
 
+        // First pass: every row must share the same shape (assoc vs positional).
         // array_find_key is PHP 8.4; polyfilled via symfony/polyfill-php84 for 8.3 hosts.
-        $mismatch = array_find_key(
+        $shapeMismatch = array_find_key(
             $rows,
             fn (array $row): bool => $this->isAssoc($row) !== $firstIsAssoc,
         );
+        if (null !== $shapeMismatch) {
+            throw MixedRowShapeException::atIndex($shapeMismatch, $firstIsAssoc);
+        }
 
-        if (null !== $mismatch) {
-            throw MixedRowShapeException::atIndex($mismatch, $firstIsAssoc);
+        if (!$firstIsAssoc) {
+            return;
+        }
+
+        // Second pass: every assoc row must share the first row's key set.
+        $firstKeys = array_keys($rows[0]);
+        $firstKeysFlipped = array_flip($firstKeys);
+
+        foreach ($rows as $index => $row) {
+            if (0 === $index) {
+                continue;
+            }
+            $rowKeys = array_keys($row);
+            if ($rowKeys === $firstKeys) {
+                continue;
+            }
+            $extra = array_values(array_diff($rowKeys, $firstKeys));
+            $missing = array_values(array_diff(array_keys($firstKeysFlipped), $rowKeys));
+            /** @var list<string> $extraStrings */
+            $extraStrings = array_map(static fn (int|string $k): string => (string) $k, $extra);
+            /** @var list<string> $missingStrings */
+            $missingStrings = array_map(static fn (int|string $k): string => (string) $k, $missing);
+            throw MixedRowShapeException::divergentAssocKeys($index, $extraStrings, $missingStrings);
         }
     }
 
@@ -427,10 +462,6 @@ final class SheetsService
      */
     private function isAssoc(array $row): bool
     {
-        if ([] === $row) {
-            return false;
-        }
-
-        return array_keys($row) !== range(0, count($row) - 1);
+        return [] !== $row && !array_is_list($row);
     }
 }

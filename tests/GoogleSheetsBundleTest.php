@@ -47,7 +47,7 @@ final class GoogleSheetsBundleTest extends TestCase
         $kernel = $this->bootKernel([
             'auth' => ['api_key' => 'test-key'],
             'spreadsheets' => [
-                'allocators' => '1abc_allocators',
+                'allocators' => ['id' => '1abc_allocators'],
             ],
         ]);
 
@@ -57,6 +57,21 @@ final class GoogleSheetsBundleTest extends TestCase
         $service = $container->get('google_sheets.sheets_service.allocators');
         self::assertInstanceOf(SheetsService::class, $service);
         self::assertSame('1abc_allocators', $service->getSpreadsheetId());
+        self::assertNull($service->getBoundSheet());
+    }
+
+    public function testSheetNameFromConfigIsBoundToService(): void
+    {
+        $kernel = $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'allocators' => ['id' => '1abc', 'sheet' => 'Allocator List'],
+            ],
+        ]);
+
+        $service = $kernel->getContainer()->get('google_sheets.sheets_service.allocators');
+        self::assertInstanceOf(SheetsService::class, $service);
+        self::assertSame('Allocator List', $service->getBoundSheet());
     }
 
     public function testSingleSpreadsheetBackingTheBareSheetsServiceAlias(): void
@@ -64,7 +79,7 @@ final class GoogleSheetsBundleTest extends TestCase
         $kernel = $this->bootKernel([
             'auth' => ['api_key' => 'test-key'],
             'spreadsheets' => [
-                'reports' => '1xyz_reports',
+                'reports' => ['id' => '1xyz_reports'],
             ],
         ]);
 
@@ -81,8 +96,8 @@ final class GoogleSheetsBundleTest extends TestCase
         $kernel = $this->bootKernel([
             'auth' => ['api_key' => 'test-key'],
             'spreadsheets' => [
-                'allocators' => '1abc_allocators',
-                'reports' => '1xyz_reports',
+                'allocators' => ['id' => '1abc_allocators'],
+                'reports' => ['id' => '1xyz_reports'],
             ],
             'default_spreadsheet' => 'reports',
         ]);
@@ -109,8 +124,8 @@ final class GoogleSheetsBundleTest extends TestCase
         $this->bootKernel([
             'auth' => ['api_key' => 'test-key'],
             'spreadsheets' => [
-                'allocators' => '1abc_allocators',
-                'reports' => '1xyz_reports',
+                'allocators' => ['id' => '1abc_allocators'],
+                'reports' => ['id' => '1xyz_reports'],
             ],
         ]);
     }
@@ -123,9 +138,48 @@ final class GoogleSheetsBundleTest extends TestCase
         $this->bootKernel([
             'auth' => ['api_key' => 'test-key'],
             'spreadsheets' => [
-                'allocators' => '1abc_allocators',
+                'allocators' => ['id' => '1abc_allocators'],
             ],
             'default_spreadsheet' => 'reports',
+        ]);
+    }
+
+    public function testInvalidSpreadsheetKeyFailsAtBoot(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessageMatches('/spreadsheets keys must contain only letters/');
+
+        $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                'my reports' => ['id' => '1abc'], // space disallowed
+            ],
+        ]);
+    }
+
+    public function testNumericSpreadsheetKeyFailsAtBoot(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessageMatches('/spreadsheets keys must contain only letters/');
+
+        // YAML key `123:` becomes int 123 in PHP — caught by the identifier
+        // validator since integer keys don't satisfy the regex.
+        $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'spreadsheets' => [
+                123 => ['id' => '1abc'],
+            ],
+        ]);
+    }
+
+    public function testEmptyScopeFailsAtBoot(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessageMatches('/scopes entries must be non-empty/');
+
+        $this->bootKernel([
+            'auth' => ['api_key' => 'test-key'],
+            'scopes' => ['https://www.googleapis.com/auth/spreadsheets', ''],
         ]);
     }
 
@@ -134,16 +188,14 @@ final class GoogleSheetsBundleTest extends TestCase
         $kernel = $this->bootKernel([
             'auth' => ['api_key' => 'test-key'],
             'spreadsheets' => [
-                'allocators' => '1abc_allocators',
-                'reports' => '1xyz_reports',
+                'allocators' => ['id' => '1abc_allocators'],
+                'reports' => ['id' => '1xyz_reports'],
             ],
             'default_spreadsheet' => 'allocators',
         ]);
 
         $container = $kernel->getContainer();
 
-        // Symfony stores the autowire-by-name alias under the magic ID
-        // "<TypeName> $<varName>" — verify both bindings landed.
         self::assertTrue($container->has(SheetsService::class.' $allocators'));
         self::assertTrue($container->has(SheetsService::class.' $reports'));
 
@@ -160,8 +212,8 @@ final class GoogleSheetsBundleTest extends TestCase
         $kernel = $this->bootKernel([
             'auth' => ['api_key' => 'test-key'],
             'spreadsheets' => [
-                'billing_data' => '1one',
-                'my-reports' => '1two',
+                'billing_data' => ['id' => '1one'],
+                'my-reports' => ['id' => '1two'],
             ],
             'default_spreadsheet' => 'billing_data',
         ]);
@@ -174,7 +226,7 @@ final class GoogleSheetsBundleTest extends TestCase
     public function testInstantiatingTheServiceWithoutCredentialsThrows(): void
     {
         $kernel = $this->bootKernel([
-            'spreadsheets' => ['x' => '1abc'],
+            'spreadsheets' => ['x' => ['id' => '1abc']],
         ]);
 
         $this->expectException(MissingCredentialsException::class);
@@ -190,7 +242,6 @@ final class GoogleSheetsBundleTest extends TestCase
 
         $client = $kernel->getContainer()->get(GoogleClient::class);
         self::assertInstanceOf(GoogleClient::class, $client);
-
         self::assertSame(['https://example.com/custom-scope'], $client->getScopes());
     }
 
@@ -202,7 +253,6 @@ final class GoogleSheetsBundleTest extends TestCase
 
         $client = $kernel->getContainer()->get(GoogleClient::class);
         self::assertInstanceOf(GoogleClient::class, $client);
-
         self::assertSame([
             GoogleSheets::SPREADSHEETS_READONLY,
             GoogleSheets::DRIVE_READONLY,
@@ -221,7 +271,6 @@ final class GoogleSheetsBundleTest extends TestCase
 
         $client = $kernel->getContainer()->get(GoogleClient::class);
         self::assertInstanceOf(GoogleClient::class, $client);
-
         self::assertSame('My App', $client->getConfig('application_name'));
         self::assertSame('cid', $client->getClientId());
     }
@@ -273,7 +322,7 @@ final class GoogleSheetsBundleTest extends TestCase
 
         self::assertInstanceOf(SheetsClient::class, $a);
         self::assertInstanceOf(SheetsClient::class, $b);
-        self::assertNotSame($a, $b, 'sheets_client must be non-shared so stateful selectors do not leak between consumers');
+        self::assertNotSame($a, $b);
     }
 
     /**

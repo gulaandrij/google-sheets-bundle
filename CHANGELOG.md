@@ -6,11 +6,21 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 - Named spreadsheets following the `league/flysystem-bundle` pattern: declare each spreadsheet under `google_sheets.spreadsheets.<name>`, inject the bound instance via `SheetsService $<camelCaseName>`. The bare `SheetsService` alias is wired to the `default_spreadsheet`.
-- Boot-time validation rejecting `default_spreadsheet` values that don't match a configured spreadsheet, and configurations with multiple spreadsheets but no `default_spreadsheet`.
-- `SheetsService::getSpreadsheetId()` to read the bound ID.
-- Full API coverage of the underlying `SheetsClient`: `firstRow`, `addSheet`, `deleteSheet`, `findSheetNameById`, `listSpreadsheets`, `spreadsheetProperties`, `sheetProperties`, `driveService`.
-- Optional `majorDimension`, `valueRenderOption`, `dateTimeRenderOption` arguments on `readRaw` / `readAssoc` / `firstRow` for fine-grained read tuning. Class constants for the Sheets API enum values.
+- Each spreadsheet entry takes an `id` and an optional `sheet`. When `sheet` is set the bound `SheetsService` methods may be called without a `$sheetName` argument; pass `$sheetName` explicitly to override.
+- Boot-time validation rejecting: `default_spreadsheet` values that don't match a configured spreadsheet, configurations with multiple spreadsheets but no `default_spreadsheet`, spreadsheet keys that can't be camelCased into a PHP variable name (e.g. `123:`, `my reports:`), and empty entries under `scopes`.
+- `SheetsService::getSpreadsheetId()` and `getBoundSheet()` to read the bound values.
+- Full API coverage of the underlying `SheetsClient`: `firstRow`, `addSheet`, `deleteSheet`, `findSheetNameById`, `spreadsheetProperties`, `sheetProperties`, `driveService`. The global `listSpreadsheets()` lives on `SheetsClientFactory` (not `SheetsService`) since it ignores any spreadsheet binding.
+- Optional `majorDimension`, `valueRenderOption`, `dateTimeRenderOption` arguments on `readRaw` / `readAssoc` for fine-grained read tuning. `firstRow` exposes only `valueRenderOption` / `dateTimeRenderOption` — `majorDimension: COLUMNS` would return the first column, contradicting the method name. Class constants for the Sheets API enum values.
 - `Google\Service\Drive` is registered as `google_sheets.google_drive` (alias `Google\Service\Drive`) so `listSpreadsheets()` and drive-aware paths work outside Laravel.
+
+### Changed
+- **BREAKING**: `append()`, `update()`, `clear()`, `firstRow()`, `readRaw()`, `readAssoc()`, `sheetProperties()` reorder parameters so `$sheetName` is optional and defaults to the bound sheet. `append($sheetName, $rows, …)` → `append($rows, $sheetName?, …)`; `update($sheetName, $range, $values, …)` → `update($range, $values, $sheetName?, …)`; `clear($sheetName, $range?)` → `clear($sheetName?, $range?)`. Migrate at the call site.
+- `append()` now enforces that all-associative rows share the same key set — divergent keys throw `MixedRowShapeException`. Previously the underlying client silently dropped non-matching values.
+- `SheetsService::isAssoc()` uses `array_is_list()` so gap-keyed numeric arrays (e.g. `array_filter` output) are treated as positional instead of misclassified as assoc.
+- `SheetsService::listSpreadsheets()` moved to `SheetsClientFactory::listSpreadsheets()` — the call is a global Drive query that doesn't belong on a per-spreadsheet service.
+
+### Fixed
+- PhpStorm "Undefined class 'Closure'" and "Thrown object must be an instance of …" inspections on `GoogleClientFactory` — closure-shape docblock removed in favour of a `protected newClient()` test seam; throws use the static factory `MissingCredentialsException::create()` annotated with `@throws`.
 
 ### Changed
 - **BREAKING**: `SheetsService` constructor now takes `string $spreadsheetId`; method signatures drop the `$spreadsheetId` parameter. See [UPGRADE.md](UPGRADE.md) for the migration recipe.

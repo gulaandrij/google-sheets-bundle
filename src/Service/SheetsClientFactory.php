@@ -14,6 +14,9 @@ use Revolution\Google\Sheets\SheetsClient;
  * caller. The underlying `Google\Service\Sheets` and `Google\Service\Drive`
  * are shared because they are stateless after construction; only the
  * `SheetsClient` wrapping them carries selector state.
+ *
+ * Also exposes spreadsheet-agnostic operations (currently just
+ * `listSpreadsheets()`) that don't fit on the per-spreadsheet `SheetsService`.
  */
 class SheetsClientFactory
 {
@@ -30,5 +33,20 @@ class SheetsClientFactory
         $client->setDriveService($this->drive);
 
         return $client;
+    }
+
+    /**
+     * List every Google Sheets file the credential can see, as a
+     * `fileId => title` map. Global Drive query — independent of any
+     * `SheetsService` binding. Requires a Drive read scope.
+     *
+     * @return array<string, string>
+     */
+    public function listSpreadsheets(): array
+    {
+        /** @var array<string, string> $list */
+        $list = $this->create()->spreadsheetList();
+
+        return $list;
     }
 }

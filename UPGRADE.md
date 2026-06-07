@@ -6,9 +6,55 @@ Behavioural and API changes between bundle versions. For dependency bumps and bu
 
 Major API will be locked at 1.0; no breaking changes planned for this release.
 
+## Pre-1.0 → 0.4.0
+
+The bundle now binds an optional sheet/tab name per spreadsheet entry, and methods accept it as the optional last argument. `append()`, `update()`, `clear()`, and the read methods all changed parameter order.
+
+### Update your config
+
+```diff
+ google_sheets:
+     spreadsheets:
+-        allocators: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
++        allocators:
++            id: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
++            sheet: 'Allocator List'   # optional — when set, methods may be called without $sheetName
+```
+
+The scalar short-form `name: '1abc'` is no longer accepted. Always use `name: { id: '1abc', sheet?: 'tab' }`.
+
+### Update your call sites
+
+`$sheetName` moved from the first argument to the optional last argument on every method (and is omitted entirely when the binding has `sheet:` set).
+
+```diff
+-$this->allocators->readAssoc('Allocator List');
++$this->allocators->readAssoc();                          // uses bound sheet
+
+-$this->allocators->append('Allocator List', $rows);
++$this->allocators->append($rows);
+
+-$this->reports->update('Daily Export', 'A1', $rows);
++$this->reports->update('A1', $rows);
+
+-$this->reports->clear('Daily Export');
++$this->reports->clear();
+```
+
+To target a different tab on the same spreadsheet, pass `$sheetName` explicitly:
+
+```php
+$this->allocators->readAssoc('Archive');                  // override
+$this->allocators->append($rows, 'Archive');
+```
+
+### listSpreadsheets moved
+
+`SheetsService::listSpreadsheets()` was removed — it was a global Drive query that didn't belong on a spreadsheet-bound service. Use `SheetsClientFactory::listSpreadsheets()` instead.
+
 ## Pre-1.0 → 0.3.0
 
-The bundle adopts the `league/flysystem-bundle` pattern for spreadsheet selection. The big change: `SheetsService` is now bound to a single spreadsheet (configured under `google_sheets.spreadsheets`), and its methods no longer take a `$spreadsheetId` argument.
+The bundle adopted the `league/flysystem-bundle` pattern for spreadsheet selection. `SheetsService` became bound to a single spreadsheet (configured under `google_sheets.spreadsheets`), and its methods no longer take a `$spreadsheetId` argument.
 
 ### Update your config
 
@@ -17,8 +63,10 @@ The bundle adopts the `league/flysystem-bundle` pattern for spreadsheet selectio
      auth:
          api_key: '%env(GOOGLE_API_KEY)%'
 +    spreadsheets:
-+        allocators: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
-+        reports:    '%env(GOOGLE_REPORTS_SHEET_ID)%'
++        allocators:
++            id: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
++        reports:
++            id: '%env(GOOGLE_REPORTS_SHEET_ID)%'
 +    default_spreadsheet: allocators
 ```
 

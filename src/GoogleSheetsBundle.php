@@ -59,20 +59,32 @@ final class GoogleSheetsBundle extends AbstractBundle
                 ->end()
                 ->arrayNode('scopes')
                     ->info('OAuth scopes the client is initialised with.')
-                    ->scalarPrototype()->end()
+                    ->scalarPrototype()
+                        ->validate()
+                            ->ifTrue(static fn (mixed $v): bool => !is_string($v) || '' === trim($v))
+                            ->thenInvalid('google_sheets.scopes entries must be non-empty strings.')
+                        ->end()
+                    ->end()
                     ->defaultValue([
                         GoogleSheets::SPREADSHEETS_READONLY,
                         GoogleSheets::DRIVE_READONLY,
                     ])
                 ->end()
                 ->arrayNode('spreadsheets')
-                    ->info('Map of `name => spreadsheetId`. Each named entry gets its own SheetsService instance, autowireable as `SheetsService $<name>`.')
+                    ->info('Map of `name => {id, sheet?}`. Each named entry becomes a SheetsService instance, autowireable as `SheetsService $<name>`.')
                     ->normalizeKeys(false)
                     ->useAttributeAsKey('name')
-                    ->scalarPrototype()
-                        ->validate()
-                            ->ifTrue(static fn (mixed $v): bool => !is_string($v) || '' === $v)
-                            ->thenInvalid('Each entry under google_sheets.spreadsheets must be a non-empty string spreadsheet ID.')
+                    ->arrayPrototype()
+                        ->children()
+                            ->scalarNode('id')
+                                ->isRequired()
+                                ->cannotBeEmpty()
+                                ->info('The Google Sheets spreadsheet ID (from the URL).')
+                            ->end()
+                            ->scalarNode('sheet')
+                                ->defaultNull()
+                                ->info('Optional default tab name. When set, SheetsService methods may be called without a $sheetName argument.')
+                            ->end()
                         ->end()
                     ->end()
                     ->defaultValue([])
@@ -81,6 +93,22 @@ final class GoogleSheetsBundle extends AbstractBundle
                     ->defaultNull()
                     ->info('Name of the spreadsheets entry that backs the unqualified `SheetsService` autowire alias. Required when more than one spreadsheet is configured.')
                 ->end()
+            ->end()
+            ->validate()
+                ->ifTrue(static function (array $config): bool {
+                    $spreadsheets = $config['spreadsheets'] ?? [];
+                    if (!is_array($spreadsheets)) {
+                        return false;
+                    }
+                    foreach (array_keys($spreadsheets) as $name) {
+                        if (!is_string($name) || !self::isValidSpreadsheetName($name)) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                })
+                ->thenInvalid('google_sheets.spreadsheets keys must contain only letters, digits, underscores, dashes or dots, and must start with a letter or underscore (so they can be camelCased into a PHP variable name).')
             ->end()
             ->validate()
                 ->ifTrue(static function (array $config): bool {
@@ -142,6 +170,7 @@ final class GoogleSheetsBundle extends AbstractBundle
                 service('google_sheets.google_service'),
                 service('google_sheets.google_drive'),
             ])
+            ->public()
         ;
 
         // Each request for the SheetsClient gets a brand-new instance so the
@@ -153,7 +182,7 @@ final class GoogleSheetsBundle extends AbstractBundle
             ->share(false)
         ;
 
-        $services->alias(SheetsClientFactory::class, 'google_sheets.sheets_client_factory');
+        $services->alias(SheetsClientFactory::class, 'google_sheets.sheets_client_factory')->public();
         $services->alias(SheetsClient::class, 'google_sheets.sheets_client');
         $services->alias(GoogleClient::class, 'google_sheets.google_client');
         $services->alias(GoogleSheets::class, 'google_sheets.google_service');
@@ -163,14 +192,15 @@ final class GoogleSheetsBundle extends AbstractBundle
             return;
         }
 
-        foreach ($spreadsheets as $name => $spreadsheetId) {
+        foreach ($spreadsheets as $name => $entry) {
             $serviceId = 'google_sheets.sheets_service.'.$name;
 
             $services
                 ->set($serviceId, SheetsService::class)
                 ->args([
                     service('google_sheets.sheets_client_factory'),
-                    $spreadsheetId,
+                    $entry['id'],
+                    $entry['sheet'],
                 ])
                 ->public()
             ;
@@ -194,9 +224,7 @@ final class GoogleSheetsBundle extends AbstractBundle
 
     /**
      * Validate the resolved config and return the factory args plus the named
-     * spreadsheets map. Runtime validation here lets us keep loadExtension's
-     * signature exactly contravariant with the parent while still passing
-     * precisely-typed values into the container.
+     * spreadsheets map.
      *
      * @param array<int|string, mixed> $config
      *
@@ -204,7 +232,7 @@ final class GoogleSheetsBundle extends AbstractBundle
      *     0: array{api_key: string|null, client_id: string|null, client_secret: string|null, auth_config: string|array<string, mixed>|null},
      *     1: list<string>,
      *     2: string|null,
-     *     3: array<string, string>,
+     *     3: array<string, array{id: string, sheet: string|null}>,
      *     4: string|null,
      * }
      */
@@ -240,17 +268,21 @@ final class GoogleSheetsBundle extends AbstractBundle
 
         $spreadsheets = $config['spreadsheets'] ?? [];
         if (!is_array($spreadsheets)) {
-            throw new LogicException('google_sheets.spreadsheets must be a map of name => id.');
+            throw new LogicException('google_sheets.spreadsheets must be a map of name => entry.');
         }
         $spreadsheetMap = [];
-        foreach ($spreadsheets as $name => $id) {
+        foreach ($spreadsheets as $name => $entry) {
             if (!is_string($name) || '' === $name) {
                 throw new LogicException('google_sheets.spreadsheets keys must be non-empty strings.');
             }
-            if (!is_string($id) || '' === $id) {
-                throw new LogicException(sprintf('google_sheets.spreadsheets["%s"] must be a non-empty string.', $name));
+            if (!is_array($entry) || !isset($entry['id']) || !is_string($entry['id']) || '' === $entry['id']) {
+                throw new LogicException(sprintf('google_sheets.spreadsheets["%s"].id must be a non-empty string.', $name));
             }
-            $spreadsheetMap[$name] = $id;
+            $sheet = $entry['sheet'] ?? null;
+            if (null !== $sheet && (!is_string($sheet) || '' === $sheet)) {
+                throw new LogicException(sprintf('google_sheets.spreadsheets["%s"].sheet must be a non-empty string or omitted.', $name));
+            }
+            $spreadsheetMap[$name] = ['id' => $entry['id'], 'sheet' => $sheet];
         }
 
         $defaultName = $this->stringOrNull($config['default_spreadsheet'] ?? null);
@@ -279,6 +311,17 @@ final class GoogleSheetsBundle extends AbstractBundle
         }
 
         return $value;
+    }
+
+    /**
+     * A spreadsheet name is valid when it converts to a non-empty PHP variable
+     * name. Allowed characters: letters, digits, underscores, dashes, dots.
+     * Must start with a letter or underscore (so the camelCased result starts
+     * with a letter and is bindable as `SheetsService $name`).
+     */
+    private static function isValidSpreadsheetName(string $name): bool
+    {
+        return (bool) preg_match('/^[A-Za-z_][A-Za-z0-9_.\-]*$/', $name);
     }
 
     /**

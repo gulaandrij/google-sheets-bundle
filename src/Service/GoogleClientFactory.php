@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace Gulaandrij\GoogleSheetsBundle\Service;
 
-use Closure;
 use Google\Client as GoogleClient;
 use Gulaandrij\GoogleSheetsBundle\Exception\MissingCredentialsException;
-use LogicException;
 
 /**
  * Builds a configured `Google\Client` from bundle configuration.
@@ -23,7 +21,7 @@ use LogicException;
  *     auth_config: string|array<string, mixed>|null,
  * }
  */
-final class GoogleClientFactory
+class GoogleClientFactory
 {
     /**
      * @param AuthConfig   $auth
@@ -33,10 +31,12 @@ final class GoogleClientFactory
         private readonly array $auth,
         private readonly array $scopes,
         private readonly ?string $applicationName = null,
-        private readonly ?Closure $clientBuilder = null,
     ) {
     }
 
+    /**
+     * @throws MissingCredentialsException
+     */
     public function __invoke(): GoogleClient
     {
         $authConfig = $this->auth['auth_config'];
@@ -48,10 +48,10 @@ final class GoogleClientFactory
             || $hasAuthConfig;
 
         if (!$hasAnyCredential) {
-            throw new MissingCredentialsException(MissingCredentialsException::DEFAULT_MESSAGE);
+            throw MissingCredentialsException::create();
         }
 
-        $client = $this->buildClient();
+        $client = $this->newClient();
 
         if (null !== $this->applicationName && '' !== $this->applicationName) {
             $client->setApplicationName($this->applicationName);
@@ -80,17 +80,14 @@ final class GoogleClientFactory
         return $client;
     }
 
-    private function buildClient(): GoogleClient
+    /**
+     * Test seam — subclasses (in test code) can return a pre-built mock
+     * `Google\Client` to bypass the real OAuth bootstrap during unit testing.
+     *
+     * @internal
+     */
+    protected function newClient(): GoogleClient
     {
-        if (null === $this->clientBuilder) {
-            return new GoogleClient();
-        }
-
-        $result = ($this->clientBuilder)();
-        if (!$result instanceof GoogleClient) {
-            throw new LogicException(sprintf('GoogleClientFactory $clientBuilder must return a %s instance.', GoogleClient::class));
-        }
-
-        return $result;
+        return new GoogleClient();
     }
 }

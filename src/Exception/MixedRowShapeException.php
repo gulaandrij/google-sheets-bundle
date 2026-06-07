@@ -18,4 +18,25 @@ final class MixedRowShapeException extends GoogleSheetsException
             $expected,
         ));
     }
+
+    /**
+     * @param list<string> $extra
+     * @param list<string> $missing
+     */
+    public static function divergentAssocKeys(int $index, array $extra, array $missing): self
+    {
+        $parts = [];
+        if ([] !== $extra) {
+            $parts[] = sprintf('extra keys [%s]', implode(', ', $extra));
+        }
+        if ([] !== $missing) {
+            $parts[] = sprintf('missing keys [%s]', implode(', ', $missing));
+        }
+
+        return new self(sprintf(
+            'append(): associative row at index %d has a different key set from the first row (%s). All rows must share the same keys so values are not silently dropped or padded.',
+            $index,
+            implode(', ', $parts),
+        ));
+    }
 }

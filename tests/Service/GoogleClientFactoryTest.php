@@ -26,10 +26,10 @@ final class GoogleClientFactoryTest extends TestCase
         $client->expects(self::never())->method('setAuthConfig');
         $client->expects(self::never())->method('setApplicationName');
 
-        $factory = new GoogleClientFactory(
+        $factory = $this->factoryReturning(
+            $client,
             auth: $this->auth(apiKey: 'secret-key'),
             scopes: ['scope-a'],
-            clientBuilder: static fn () => $client,
         );
 
         self::assertSame($client, $factory());
@@ -44,24 +44,38 @@ final class GoogleClientFactoryTest extends TestCase
         $client->expects(self::never())->method('setDeveloperKey');
         $client->expects(self::never())->method('setAuthConfig');
 
-        $factory = new GoogleClientFactory(
+        $factory = $this->factoryReturning(
+            $client,
             auth: $this->auth(clientId: 'cid', clientSecret: 'csecret'),
             scopes: ['scope-b'],
-            clientBuilder: static fn () => $client,
         );
 
         $factory();
     }
 
-    public function testAuthConfigIsApplied(): void
+    public function testAuthConfigStringIsApplied(): void
     {
         $client = $this->createMock(GoogleClient::class);
         $client->expects(self::once())->method('setAuthConfig')->with('/etc/google.json');
 
-        $factory = new GoogleClientFactory(
+        $factory = $this->factoryReturning(
+            $client,
             auth: $this->auth(authConfig: '/etc/google.json'),
-            scopes: [],
-            clientBuilder: static fn () => $client,
+        );
+
+        $factory();
+    }
+
+    public function testAuthConfigArrayIsApplied(): void
+    {
+        $payload = ['type' => 'service_account', 'project_id' => 'demo'];
+
+        $client = $this->createMock(GoogleClient::class);
+        $client->expects(self::once())->method('setAuthConfig')->with($payload);
+
+        $factory = $this->factoryReturning(
+            $client,
+            auth: $this->auth(authConfig: $payload),
         );
 
         $factory();
@@ -72,11 +86,11 @@ final class GoogleClientFactoryTest extends TestCase
         $client = $this->createMock(GoogleClient::class);
         $client->expects(self::once())->method('setApplicationName')->with('My App');
 
-        $factory = new GoogleClientFactory(
+        $factory = $this->factoryReturning(
+            $client,
             auth: $this->auth(apiKey: 'k'),
             scopes: ['s'],
             applicationName: 'My App',
-            clientBuilder: static fn () => $client,
         );
 
         $factory();
@@ -87,10 +101,10 @@ final class GoogleClientFactoryTest extends TestCase
         $client = $this->createMock(GoogleClient::class);
         $client->expects(self::never())->method('setScopes');
 
-        $factory = new GoogleClientFactory(
+        $factory = $this->factoryReturning(
+            $client,
             auth: $this->auth(apiKey: 'k'),
             scopes: [],
-            clientBuilder: static fn () => $client,
         );
 
         $factory();
@@ -105,7 +119,8 @@ final class GoogleClientFactoryTest extends TestCase
         $client->expects(self::never())->method('setAuthConfig');
         $client->expects(self::never())->method('setApplicationName');
 
-        $factory = new GoogleClientFactory(
+        $factory = $this->factoryReturning(
+            $client,
             auth: [
                 'api_key' => 'k',
                 'client_id' => '',
@@ -114,7 +129,20 @@ final class GoogleClientFactoryTest extends TestCase
             ],
             scopes: [],
             applicationName: '',
-            clientBuilder: static fn () => $client,
+        );
+
+        $factory();
+    }
+
+    public function testEmptyAuthConfigArrayIsTreatedAsAbsent(): void
+    {
+        $client = $this->createMock(GoogleClient::class);
+        $client->expects(self::once())->method('setDeveloperKey')->with('k');
+        $client->expects(self::never())->method('setAuthConfig');
+
+        $factory = $this->factoryReturning(
+            $client,
+            auth: $this->auth(apiKey: 'k', authConfig: []),
         );
 
         $factory();
@@ -122,29 +150,57 @@ final class GoogleClientFactoryTest extends TestCase
 
     public function testMissingCredentialsThrows(): void
     {
-        $factory = new GoogleClientFactory(
-            auth: $this->auth(),
-            scopes: [],
-            clientBuilder: static fn () => self::fail('Builder should not be invoked when credentials are missing.'),
-        );
+        $client = $this->createMock(GoogleClient::class);
+        $client->expects(self::never())->method('setDeveloperKey');
+
+        $factory = $this->factoryReturning($client, auth: $this->auth());
 
         $this->expectException(MissingCredentialsException::class);
         $factory();
     }
 
     /**
+     * @param array{api_key: string|null, client_id: string|null, client_secret: string|null, auth_config: string|array<string, mixed>|null} $auth
+     * @param list<string>                                                                                                                   $scopes
+     */
+    private function factoryReturning(
+        GoogleClient $client,
+        array $auth,
+        array $scopes = [],
+        ?string $applicationName = null,
+    ): GoogleClientFactory {
+        return new class($auth, $scopes, $applicationName, $client) extends GoogleClientFactory {
+            public function __construct(
+                array $auth,
+                array $scopes,
+                ?string $applicationName,
+                private readonly GoogleClient $stub,
+            ) {
+                parent::__construct($auth, $scopes, $applicationName);
+            }
+
+            protected function newClient(): GoogleClient
+            {
+                return $this->stub;
+            }
+        };
+    }
+
+    /**
+     * @param string|array<string, mixed>|null $authConfig
+     *
      * @return array{
      *     api_key: string|null,
      *     client_id: string|null,
      *     client_secret: string|null,
-     *     auth_config: string|null,
+     *     auth_config: string|array<string, mixed>|null,
      * }
      */
     private function auth(
         ?string $apiKey = null,
         ?string $clientId = null,
         ?string $clientSecret = null,
-        ?string $authConfig = null,
+        string|array|null $authConfig = null,
     ): array {
         return [
             'api_key' => $apiKey,

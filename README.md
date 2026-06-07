@@ -55,9 +55,12 @@ google_sheets:
         - 'https://www.googleapis.com/auth/spreadsheets'
         - 'https://www.googleapis.com/auth/drive.readonly'
     spreadsheets:
-        allocators: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
-        reports:    '%env(GOOGLE_REPORTS_SHEET_ID)%'
-    default_spreadsheet: allocators     # required when more than one spreadsheet is declared
+        allocators:
+            id: '%env(GOOGLE_ALLOCATORS_SHEET_ID)%'
+            sheet: 'Allocator List'              # optional: bind a default tab
+        reports:
+            id: '%env(GOOGLE_REPORTS_SHEET_ID)%' # sheet omitted — pass per-call
+    default_spreadsheet: allocators              # required when more than one spreadsheet is declared
 ```
 
 Each entry under `spreadsheets` becomes:
@@ -67,6 +70,10 @@ Each entry under `spreadsheets` becomes:
 - For the `default_spreadsheet` entry, the bare `SheetsService` alias and `SheetsService::class` autowire target.
 
 `spreadsheets` is optional — if you only need the lower-level `SheetsClient` / `SheetsClientFactory` services, omit it entirely. If you declare exactly one spreadsheet, it becomes the default automatically; with more than one you must set `default_spreadsheet` explicitly (the bundle fails at boot otherwise).
+
+Spreadsheet names must contain only letters, digits, underscores, dashes, or dots, and must start with a letter or underscore so they can be camelCased into a PHP variable name. Invalid names fail at config-tree validation.
+
+The `sheet` key is optional. When set, `SheetsService::readRaw()`, `readAssoc()`, `firstRow()`, `append()`, `update()`, `clear()`, and `sheetProperties()` may be called without a `$sheetName` argument and operate on the bound tab. Passing an explicit `$sheetName` overrides the bound default — useful when a single spreadsheet has many tabs and you want one service to cover them all.
 
 If no `scopes` are set the bundle defaults to read-only access:
 
@@ -125,22 +132,24 @@ If you need a dynamic spreadsheet ID (only known at runtime), inject `SheetsClie
 #### Reading
 
 ```php
-SheetsService::readRaw(string $sheetName, ?string $range = null, ?string $majorDimension = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
-SheetsService::readAssoc(string $sheetName, ?string $range = null, ?string $majorDimension = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
-SheetsService::firstRow(string $sheetName, ?string $range = null, ?string $majorDimension = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
+SheetsService::readRaw(?string $sheetName = null, ?string $range = null, ?string $majorDimension = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
+SheetsService::readAssoc(?string $sheetName = null, ?string $range = null, ?string $majorDimension = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
+SheetsService::firstRow(?string $sheetName = null, ?string $range = null, ?string $valueRenderOption = null, ?string $dateTimeRenderOption = null): array
 ```
 
-The optional read modifiers map onto the Sheets API's `majorDimension` / `valueRenderOption` / `dateTimeRenderOption` query parameters. Class constants are provided for convenience: `SheetsService::MAJOR_DIMENSION_ROWS|COLUMNS`, `VALUE_RENDER_FORMATTED|UNFORMATTED|FORMULA`, `DATE_TIME_RENDER_SERIAL|FORMATTED`.
+`$sheetName` defaults to the configured `sheet` for the binding; pass an explicit value to target a different tab. The optional read modifiers map onto the Sheets API's `majorDimension` / `valueRenderOption` / `dateTimeRenderOption` query parameters. Class constants are provided for convenience: `SheetsService::MAJOR_DIMENSION_ROWS|COLUMNS`, `VALUE_RENDER_FORMATTED|UNFORMATTED|FORMULA`, `DATE_TIME_RENDER_SERIAL|FORMATTED`. `firstRow()` deliberately does not expose `majorDimension` — under `COLUMNS` it would return the first column.
 
 #### Writing
 
 ```php
-SheetsService::append(string $sheetName, array $rows, string $valueInputOption = 'RAW', string $insertDataOption = 'OVERWRITE'): AppendValuesResponse
-SheetsService::update(string $sheetName, string $range, array $values, string $valueInputOption = 'RAW'): BatchUpdateValuesResponse
-SheetsService::clear(string $sheetName, ?string $range = null): ?ClearValuesResponse
+SheetsService::append(array $rows, ?string $sheetName = null, string $valueInputOption = 'RAW', string $insertDataOption = 'OVERWRITE'): AppendValuesResponse
+SheetsService::update(string $range, array $values, ?string $sheetName = null, string $valueInputOption = 'RAW'): BatchUpdateValuesResponse
+SheetsService::clear(?string $sheetName = null, ?string $range = null): ?ClearValuesResponse
 ```
 
 Use the `SheetsService::VALUE_INPUT_RAW` / `VALUE_INPUT_USER_ENTERED` and `INSERT_DATA_OVERWRITE` / `INSERT_DATA_INSERT_ROWS` constants for the option arguments.
+
+`append()` enforces row-shape consistency upfront: all rows must be positional, or all rows must be associative with the **same key set** — mixed shapes or divergent assoc keys throw `MixedRowShapeException` instead of letting the underlying client silently drop values.
 
 #### Tab management
 
@@ -157,16 +166,17 @@ Both require the `https://www.googleapis.com/auth/spreadsheets` scope.
 SheetsService::listSheets(): array
 SheetsService::listSheetsWithIds(): array
 SheetsService::findSheetNameById(int $sheetId): ?string
-SheetsService::listSpreadsheets(): array
+
+SheetsClientFactory::listSpreadsheets(): array     // global Drive query — lives on the factory, not a bound SheetsService
 ```
 
-`listSpreadsheets` is a Drive query — it lists every spreadsheet the credential can see, independent of the bound spreadsheet ID. Requires a Drive read scope.
+`listSpreadsheets` lives on `SheetsClientFactory` because it's a global Drive query (`fileId => title`) and is independent of any spreadsheet binding. Requires a Drive read scope.
 
 #### Metadata
 
 ```php
 SheetsService::spreadsheetProperties(): object
-SheetsService::sheetProperties(string $sheetName): object
+SheetsService::sheetProperties(?string $sheetName = null): object
 ```
 
 Returned objects mirror the Sheets API's `SpreadsheetProperties` / `SheetProperties` resources (`title`, `locale`, `timeZone`, `gridProperties`, etc.).
@@ -177,6 +187,7 @@ Returned objects mirror the Sheets API's `SpreadsheetProperties` / `SheetPropert
 SheetsService::client(): SheetsClient
 SheetsService::driveService(): \Google\Service\Drive
 SheetsService::getSpreadsheetId(): string
+SheetsService::getBoundSheet(): ?string
 ```
 
 `client()` returns a brand-new `SheetsClient` per call; `driveService()` returns the shared `Google\Service\Drive` instance for Drive-level operations not covered by this service.
