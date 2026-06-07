@@ -4,16 +4,22 @@ declare(strict_types=1);
 
 namespace Gulaandrij\GoogleSheetsBundle\Service;
 
+use Generator;
 use Google\Service\Drive;
 use Google\Service\Sheets\AppendValuesResponse;
 use Google\Service\Sheets\BatchUpdateSpreadsheetResponse;
 use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
+use Gulaandrij\GoogleSheetsBundle\Attribute\SheetColumn;
 use Gulaandrij\GoogleSheetsBundle\Exception\DuplicateHeaderException;
 use Gulaandrij\GoogleSheetsBundle\Exception\InvalidHeaderException;
 use Gulaandrij\GoogleSheetsBundle\Exception\MissingSheetNameException;
 use Gulaandrij\GoogleSheetsBundle\Exception\MixedRowShapeException;
+use InvalidArgumentException;
+use LogicException;
+use ReflectionClass;
 use Revolution\Google\Sheets\SheetsClient;
+use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 
 /**
  * High-level wrapper around `SheetsClient`, bound to a single spreadsheet and
@@ -56,6 +62,7 @@ class SheetsService
         private readonly SheetsClientFactory $factory,
         private readonly string $spreadsheetId,
         private readonly ?string $boundSheet = null,
+        private readonly ?DenormalizerInterface $denormalizer = null,
     ) {
     }
 
@@ -158,6 +165,110 @@ class SheetsService
     }
 
     /**
+     * Read assoc rows and denormalize each into an instance of `$className`
+     * via the Symfony Serializer. Property → column mapping respects
+     * `#[SheetColumn('Header Name')]` attributes on the target class.
+     *
+     * Requires `symfony/serializer` to be wired in your project (the bundle
+     * auto-injects the `serializer` service when available). Throws a clear
+     * exception otherwise.
+     *
+     * @template T of object
+     *
+     * @param class-string<T> $className
+     *
+     * @return list<T>
+     */
+    public function readEntities(
+        string $className,
+        ?string $sheetName = null,
+        ?string $range = null,
+    ): array {
+        if (null === $this->denormalizer) {
+            throw new LogicException('readEntities() requires symfony/serializer. Enable it in framework.serializer or pass a DenormalizerInterface to SheetsService.');
+        }
+
+        $rows = $this->readAssoc($sheetName, $range);
+        $columnMap = $this->buildColumnMap($className);
+
+        $result = [];
+        foreach ($rows as $row) {
+            $remapped = [];
+            foreach ($row as $sheetKey => $value) {
+                $remapped[$columnMap[$sheetKey] ?? $sheetKey] = $value;
+            }
+            /** @var T $entity */
+            $entity = $this->denormalizer->denormalize($remapped, $className);
+            $result[] = $entity;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Iterate assoc rows lazily in batches of `$batchSize` rows — handy when a
+     * sheet has tens of thousands of rows that would otherwise blow the
+     * memory limit if loaded all at once.
+     *
+     * The first batch reads the header row; subsequent batches start after it.
+     *
+     * @return Generator<int, array<string, mixed>>
+     *
+     * @throws DuplicateHeaderException
+     * @throws InvalidHeaderException
+     */
+    public function readAssocIterable(
+        ?string $sheetName = null,
+        int $batchSize = 500,
+    ): Generator {
+        if ($batchSize < 1) {
+            throw new InvalidArgumentException(sprintf('$batchSize must be >= 1, got %d.', $batchSize));
+        }
+
+        $sheet = $this->resolveSheetName($sheetName);
+
+        $headerRow = $this->doFirstRow($sheet, null);
+        if ([] === $headerRow) {
+            return;
+        }
+        $header = $this->normaliseHeader($headerRow);
+        $count = count($header);
+        if (0 === $count) {
+            return;
+        }
+        $lastCol = self::columnLetter($count);
+
+        $rowIndex = 2;
+        while (true) {
+            $endRow = $rowIndex + $batchSize - 1;
+            $batch = $this->doReadRaw(
+                $sheet,
+                sprintf('A%d:%s%d', $rowIndex, $lastCol, $endRow),
+                null,
+                null,
+                null,
+            );
+
+            if ([] === $batch) {
+                return;
+            }
+
+            foreach ($batch as $row) {
+                $padded = array_pad(array_values($row), $count, '');
+                $padded = array_slice($padded, 0, $count);
+                /** @var array<string, mixed> $combined */
+                $combined = array_combine($header, $padded);
+                yield $combined;
+            }
+
+            if (count($batch) < $batchSize) {
+                return;
+            }
+            $rowIndex = $endRow + 1;
+        }
+    }
+
+    /**
      * Read just the first row of a sheet (or sub-range). `majorDimension` is
      * deliberately not exposed — under `COLUMNS` it would return the first
      * column, contradicting the method name.
@@ -167,6 +278,18 @@ class SheetsService
     public function firstRow(
         ?string $sheetName = null,
         ?string $range = null,
+        ?string $valueRenderOption = null,
+        ?string $dateTimeRenderOption = null,
+    ): array {
+        return $this->doFirstRow($sheetName, $range, $valueRenderOption, $dateTimeRenderOption);
+    }
+
+    /**
+     * @return list<mixed>
+     */
+    private function doFirstRow(
+        ?string $sheetName,
+        ?string $range,
         ?string $valueRenderOption = null,
         ?string $dateTimeRenderOption = null,
     ): array {
@@ -490,5 +613,48 @@ class SheetsService
     private function isAssoc(array $row): bool
     {
         return [] !== $row && !array_is_list($row);
+    }
+
+    /**
+     * Convert a 1-based column index into A1-notation column letters
+     * (1 → A, 26 → Z, 27 → AA, 702 → ZZ, …).
+     */
+    private static function columnLetter(int $columnIndex): string
+    {
+        if ($columnIndex < 1) {
+            throw new InvalidArgumentException(sprintf('columnLetter expects a 1-based index, got %d.', $columnIndex));
+        }
+
+        $letters = '';
+        while ($columnIndex > 0) {
+            --$columnIndex;
+            $letters = chr(65 + ($columnIndex % 26)).$letters;
+            $columnIndex = intdiv($columnIndex, 26);
+        }
+
+        return $letters;
+    }
+
+    /**
+     * Build a `sheetHeader => propertyName` rewrite map for a target class by
+     * inspecting `#[SheetColumn]` attributes on its properties.
+     *
+     * @param class-string $className
+     *
+     * @return array<string, string>
+     */
+    private function buildColumnMap(string $className): array
+    {
+        $map = [];
+        $reflection = new ReflectionClass($className);
+        foreach ($reflection->getProperties() as $property) {
+            foreach ($property->getAttributes(SheetColumn::class) as $attribute) {
+                /** @var SheetColumn $instance */
+                $instance = $attribute->newInstance();
+                $map[$instance->name] = $property->getName();
+            }
+        }
+
+        return $map;
     }
 }

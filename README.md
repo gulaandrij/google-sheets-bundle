@@ -217,6 +217,97 @@ Each layer is registered both under a typed alias and an explicit service ID:
 
 All five are autowireable by class name. `SheetsService` is additionally autowireable by variable name as described above.
 
+## Console commands
+
+The bundle ships four introspection commands that use the configured bindings:
+
+| Command                                       | Purpose                                                                                              |
+|-----------------------------------------------|------------------------------------------------------------------------------------------------------|
+| `google-sheets:list`                          | List every binding configured under `google_sheets.spreadsheets` (name, ID, bound tab).             |
+| `google-sheets:tabs <binding>`                | List every tab in the bound spreadsheet for one binding.                                            |
+| `google-sheets:peek <binding> [sheet] [--rows=N] [--range=A1:Z]` | Dump the first N rows as a Symfony table — useful for sanity-checking auth + connectivity. |
+| `google-sheets:doctor`                        | Probe every binding, report reachability + whether the bound sheet exists.                          |
+
+`doctor` returns a non-zero exit code if any binding fails — wire it into your deploy pipeline to catch misconfiguration before the first runtime call.
+
+## Typed reads with DTOs
+
+For DTOs whose property names don't match sheet headers, place `#[SheetColumn]` attributes and call `readEntities` instead of `readAssoc`:
+
+```php
+use Gulaandrij\GoogleSheetsBundle\Attribute\SheetColumn;
+
+final class Allocator
+{
+    #[SheetColumn('Record ID - Contact')]
+    public ?string $contactId = null;
+
+    #[SheetColumn('First Name')]
+    public ?string $firstName = null;
+
+    #[SheetColumn('Email')]
+    public ?string $email = null;
+}
+
+// In your service:
+$allocators = $this->allocators->readEntities(Allocator::class);
+// returns Allocator[] — the serializer denormalizes each row.
+```
+
+Requires `framework.serializer` to be enabled (Symfony auto-installs it; nothing else to configure). The bundle wires the denormalizer automatically when available; without it `readEntities()` throws a clear `LogicException`.
+
+## Streaming large sheets
+
+`readAssoc()` loads the whole sheet into memory — fine for thousands of rows, harsh for hundreds of thousands. `readAssocIterable()` yields rows one at a time, fetching them from the API in batches:
+
+```php
+foreach ($this->reports->readAssocIterable(batchSize: 1000) as $row) {
+    $this->process($row);
+}
+```
+
+## Opt-in read caching
+
+Slowly-changing reference data (e.g. keyword tables, dictionaries) can be cached transparently. Add a `cache` block to the binding:
+
+```yaml
+google_sheets:
+    spreadsheets:
+        category_keywords:
+            id: '%env(GOOGLE_CATEGORIES_SHEET_ID)%'
+            sheet: 'Keywords'
+            cache:
+                ttl: 3600                # seconds
+                pool: cache.app          # any service implementing Symfony\Contracts\Cache\CacheInterface
+```
+
+Reads (`readAssoc`, `readRaw`, `firstRow`, `listSheets*`, `*Properties`) are now memoised. Writes pass through unchanged. **Caching is skipped when `kernel.debug` is true** — the profiler shows real Sheets calls in dev.
+
+## Testing your code
+
+Drop `Gulaandrij\GoogleSheetsBundle\Test\InMemorySheetsService` into the container in test setup to skip Google entirely:
+
+```php
+use Gulaandrij\GoogleSheetsBundle\Test\InMemorySheetsService;
+
+// tests/Functional/AllocatorImportTest.php
+protected function setUp(): void
+{
+    parent::setUp();
+    self::getContainer()->set(
+        'google_sheets.sheets_service.hubspot_allocators',
+        new InMemorySheetsService([
+            'Allocator List' => [
+                ['Record ID - Contact', 'First Name', 'Email'],
+                ['c-1', 'Alice', 'alice@example.com'],
+            ],
+        ], boundSheet: 'Allocator List'),
+    );
+}
+```
+
+The fake supports the full read/write surface (`readRaw`, `readAssoc`, `append`, `update`, `clear`, `addSheet`, `deleteSheet`, `listSheets*`, `findSheetNameById`, etc.) so most tests don't need any extra mocking.
+
 ## Web Profiler
 
 When `kernel.debug` is true (typically the `dev` environment), the bundle automatically wraps every named `SheetsService` with a tracing decorator and registers a Symfony Web Profiler data collector. A "Google Sheets" toolbar item shows the total call count and total time spent in Sheets calls; clicking it opens a panel listing each call (service binding, method, spreadsheet ID, sheet, range, duration, status).

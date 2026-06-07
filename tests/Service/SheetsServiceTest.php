@@ -15,6 +15,9 @@ use Gulaandrij\GoogleSheetsBundle\Exception\MissingSheetNameException;
 use Gulaandrij\GoogleSheetsBundle\Exception\MixedRowShapeException;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
+use Gulaandrij\GoogleSheetsBundle\Tests\Fixtures\PersonDto;
+use InvalidArgumentException;
+use LogicException;
 use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -22,6 +25,9 @@ use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use ReflectionParameter;
 use Revolution\Google\Sheets\SheetsClient;
+use Symfony\Component\Serializer\Encoder\JsonEncoder;
+use Symfony\Component\Serializer\Normalizer\ObjectNormalizer;
+use Symfony\Component\Serializer\Serializer;
 
 /**
  * @internal
@@ -452,6 +458,116 @@ final class SheetsServiceTest extends TestCase
         self::assertSame($drive, $service->driveService());
     }
 
+    public function testReadEntitiesMapsRowsToDtoViaSheetColumnAttribute(): void
+    {
+        $rows = [
+            ['Record ID - Contact', 'First Name', 'Email'],
+            ['c-1', 'Alice', 'alice@example.com'],
+            ['c-2', 'Bob', 'bob@example.com'],
+        ];
+
+        $factory = $this->createMock(SheetsClientFactory::class);
+        $factory->method('create')->willReturn($this->seededClient($rows));
+
+        $service = new SheetsService(
+            $factory,
+            self::SHEET_ID,
+            self::BOUND_TAB,
+            new Serializer([new ObjectNormalizer()], [new JsonEncoder()]),
+        );
+
+        $entities = $service->readEntities(PersonDto::class);
+
+        self::assertCount(2, $entities);
+        self::assertSame('c-1', $entities[0]->contactId);
+        self::assertSame('Alice', $entities[0]->firstName);
+        self::assertSame('alice@example.com', $entities[0]->email);
+        self::assertSame('c-2', $entities[1]->contactId);
+    }
+
+    public function testReadEntitiesWithoutSerializerThrows(): void
+    {
+        $factory = $this->createMock(SheetsClientFactory::class);
+        $service = new SheetsService($factory, self::SHEET_ID, self::BOUND_TAB, null);
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('requires symfony/serializer');
+
+        $service->readEntities(PersonDto::class);
+    }
+
+    public function testReadAssocIterableStreamsRows(): void
+    {
+        $header = ['Name', 'Email'];
+        // Build a fake "sheet" with 7 rows + the header. With batchSize=3 we
+        // expect: header batch, then batches of 3, 3, 1 → reader signals end
+        // when the final batch is shorter than the requested size.
+        $allRowsBeyondHeader = [
+            ['A', 'a@x'], ['B', 'b@x'], ['C', 'c@x'],
+            ['D', 'd@x'], ['E', 'e@x'], ['F', 'f@x'],
+            ['G', 'g@x'],
+        ];
+
+        $batches = [
+            $header, // first() returns header
+            array_slice($allRowsBeyondHeader, 0, 3),
+            array_slice($allRowsBeyondHeader, 3, 3),
+            array_slice($allRowsBeyondHeader, 6, 3), // 1 row → triggers end
+        ];
+
+        $batchIndex = 0;
+
+        $factory = $this->createMock(SheetsClientFactory::class);
+        $factory->method('create')->willReturnCallback(function () use (&$batchIndex, $batches): SheetsClient {
+            $client = $this->createMock(SheetsClient::class);
+            $client->method('spreadsheet')->willReturnSelf();
+            $client->method('sheet')->willReturnSelf();
+            $client->method('range')->willReturnSelf();
+            $client->method('first')->willReturn($batches[0]);
+            $client->method('all')->willReturnCallback(static function () use (&$batchIndex, $batches): array {
+                ++$batchIndex;
+
+                return $batches[$batchIndex] ?? [];
+            });
+
+            return $client;
+        });
+
+        $service = new SheetsService($factory, self::SHEET_ID, self::BOUND_TAB);
+
+        $collected = iterator_to_array($service->readAssocIterable(batchSize: 3), false);
+
+        self::assertCount(7, $collected);
+        self::assertSame(['Name' => 'A', 'Email' => 'a@x'], $collected[0]);
+        self::assertSame(['Name' => 'G', 'Email' => 'g@x'], $collected[6]);
+    }
+
+    public function testReadAssocIterableReturnsEarlyWhenSheetIsEmpty(): void
+    {
+        $factory = $this->createMock(SheetsClientFactory::class);
+        $client = $this->createMock(SheetsClient::class);
+        $client->method('spreadsheet')->willReturnSelf();
+        $client->method('sheet')->willReturnSelf();
+        $client->method('first')->willReturn([]);
+        $factory->method('create')->willReturn($client);
+
+        $service = new SheetsService($factory, self::SHEET_ID, self::BOUND_TAB);
+
+        self::assertSame([], iterator_to_array($service->readAssocIterable()));
+    }
+
+    public function testReadAssocIterableRejectsZeroBatchSize(): void
+    {
+        $factory = $this->createMock(SheetsClientFactory::class);
+        $service = new SheetsService($factory, self::SHEET_ID, self::BOUND_TAB);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('batchSize must be >= 1');
+
+        // Generators are lazy; force evaluation.
+        iterator_to_array($service->readAssocIterable(batchSize: 0));
+    }
+
     public function testClientReturnsAFreshInstanceEachCall(): void
     {
         $clientA = $this->createMock(SheetsClient::class);
@@ -492,6 +608,14 @@ final class SheetsServiceTest extends TestCase
         $client->method('all')->willReturn($rows);
 
         return $client;
+    }
+
+    /**
+     * @param list<list<mixed>> $rows
+     */
+    private function seededClient(array $rows): SheetsClient
+    {
+        return $this->stubClientReturning($rows);
     }
 
     private function bound(SheetsClient $first, SheetsClient ...$rest): SheetsService

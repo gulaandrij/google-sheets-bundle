@@ -69,45 +69,67 @@
             {% endif %}
         </div>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>Service</th>
-                    <th>Method</th>
-                    <th>Spreadsheet</th>
-                    <th>Sheet</th>
-                    <th>Range</th>
-                    <th class="text-right">Duration</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for i, call in collector.calls %}
+        {# Group calls by service binding so a request that hits many bindings reads more cleanly. #}
+        {% set groups = {} %}
+        {% for call in collector.calls %}
+            {% set groups = groups|merge({ (call.service): (groups[call.service]|default([]))|merge([call]) }) %}
+        {% endfor %}
+
+        {% for serviceName, serviceCalls in groups %}
+            {% set group_duration = serviceCalls|reduce((c, call) => c + call.duration_ms, 0) %}
+            <h3 style="margin-top: 24px;">
+                <code>{{ serviceName }}</code>
+                <small style="font-weight: normal; color: #666;">
+                    — {{ serviceCalls|length }} call{{ serviceCalls|length == 1 ? '' : 's' }},
+                    {{ group_duration|number_format(1) }} ms
+                </small>
+            </h3>
+            <table>
+                <thead>
                     <tr>
-                        <td>{{ i + 1 }}</td>
-                        <td><code>{{ call.service }}</code></td>
-                        <td><code>{{ call.method }}</code></td>
-                        <td><code title="{{ call.spreadsheet_id }}">{{ call.spreadsheet_id|slice(0, 12) }}…</code></td>
-                        <td>{{ call.sheet ?: '—' }}</td>
-                        <td>{{ call.range ?: '—' }}</td>
-                        <td class="text-right">{{ call.duration_ms|number_format(1) }} ms</td>
-                        <td>
-                            {% if call.error %}
-                                <span class="label status-error" title="{{ call.error }}">error</span>
-                            {% else %}
-                                <span class="label status-success">ok</span>
-                            {% endif %}
-                        </td>
+                        <th>#</th>
+                        <th>Method</th>
+                        <th>Spreadsheet</th>
+                        <th>Sheet</th>
+                        <th>Range</th>
+                        <th>Origin</th>
+                        <th class="text-right">Duration</th>
+                        <th>Status</th>
                     </tr>
-                    {% if call.error %}
+                </thead>
+                <tbody>
+                    {% for i, call in serviceCalls %}
                         <tr>
-                            <td></td>
-                            <td colspan="7"><pre style="margin:0;color:#b94a48;">{{ call.error }}</pre></td>
+                            <td>{{ i + 1 }}</td>
+                            <td><code>{{ call.method }}</code></td>
+                            <td><code title="{{ call.spreadsheet_id }}">{{ call.spreadsheet_id|slice(0, 12) }}…</code></td>
+                            <td>{{ call.sheet ?: '—' }}</td>
+                            <td>{{ call.range ?: '—' }}</td>
+                            <td>
+                                {% if call.origin %}
+                                    <small><code title="{{ call.origin }}">{{ call.origin|split('/')|last }}</code></small>
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td class="text-right">{{ call.duration_ms|number_format(1) }} ms</td>
+                            <td>
+                                {% if call.error %}
+                                    <span class="label status-error" title="{{ call.error }}">error</span>
+                                {% else %}
+                                    <span class="label status-success">ok</span>
+                                {% endif %}
+                            </td>
                         </tr>
-                    {% endif %}
-                {% endfor %}
-            </tbody>
-        </table>
+                        {% if call.error %}
+                            <tr>
+                                <td></td>
+                                <td colspan="7"><pre style="margin:0;color:#b94a48;">{{ call.error }}</pre></td>
+                            </tr>
+                        {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endfor %}
     {% endif %}
 {% endblock %}

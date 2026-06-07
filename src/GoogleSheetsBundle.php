@@ -7,10 +7,16 @@ namespace Gulaandrij\GoogleSheetsBundle;
 use Google\Client as GoogleClient;
 use Google\Service\Drive as GoogleDrive;
 use Google\Service\Sheets as GoogleSheets;
+use Gulaandrij\GoogleSheetsBundle\Command\DoctorCommand;
+use Gulaandrij\GoogleSheetsBundle\Command\ListSpreadsheetsCommand;
+use Gulaandrij\GoogleSheetsBundle\Command\PeekCommand;
+use Gulaandrij\GoogleSheetsBundle\Command\TabsCommand;
 use Gulaandrij\GoogleSheetsBundle\Profiler\SheetsCollector;
 use Gulaandrij\GoogleSheetsBundle\Profiler\TraceableSheetsService;
+use Gulaandrij\GoogleSheetsBundle\Service\CachedSheetsService;
 use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
+use Gulaandrij\GoogleSheetsBundle\Service\SheetsRegistry;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
 use LogicException;
 use Revolution\Google\Sheets\SheetsClient;
@@ -18,8 +24,10 @@ use Symfony\Component\Config\Definition\Configurator\DefinitionConfigurator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigurator;
 use Symfony\Component\HttpKernel\Bundle\AbstractBundle;
+use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 
 use function Symfony\Component\DependencyInjection\Loader\Configurator\service;
+use function Symfony\Component\DependencyInjection\Loader\Configurator\service_locator;
 
 final class GoogleSheetsBundle extends AbstractBundle
 {
@@ -86,6 +94,20 @@ final class GoogleSheetsBundle extends AbstractBundle
                             ->scalarNode('sheet')
                                 ->defaultNull()
                                 ->info('Optional default tab name. When set, SheetsService methods may be called without a $sheetName argument.')
+                            ->end()
+                            ->arrayNode('cache')
+                                ->info('Opt-in read-result caching. When set, reads (readRaw/readAssoc/firstRow/listSheets/spreadsheetProperties/sheetProperties) are memoised through a Symfony cache pool. Not applied when kernel.debug is true — the profiler shows real calls.')
+                                ->children()
+                                    ->integerNode('ttl')
+                                        ->isRequired()
+                                        ->min(1)
+                                        ->info('Cache TTL in seconds.')
+                                    ->end()
+                                    ->scalarNode('pool')
+                                        ->defaultValue('cache.app')
+                                        ->info('Symfony cache pool service ID. Must implement Symfony\Contracts\Cache\CacheInterface.')
+                                    ->end()
+                                ->end()
                             ->end()
                         ->end()
                     ->end()
@@ -210,22 +232,50 @@ final class GoogleSheetsBundle extends AbstractBundle
         foreach ($spreadsheets as $name => $entry) {
             $serviceId = 'google_sheets.sheets_service.'.$name;
 
-            $serviceClass = $debug ? TraceableSheetsService::class : SheetsService::class;
-            $args = [
-                service('google_sheets.sheets_client_factory'),
-                $entry['id'],
-                $entry['sheet'],
-            ];
-            if ($debug) {
-                $args[] = service('google_sheets.profiler.collector');
-                $args[] = $name;
-            }
+            $denormalizer = service(DenormalizerInterface::class)->nullOnInvalid();
+            $factoryRef = service('google_sheets.sheets_client_factory');
+            $cache = $entry['cache'];
 
-            $services
-                ->set($serviceId, $serviceClass)
-                ->args($args)
-                ->public()
-            ;
+            if ($debug) {
+                // Profiler trace wins over caching in debug mode — the panel
+                // should show real Sheets calls, not cache hits.
+                $services
+                    ->set($serviceId, TraceableSheetsService::class)
+                    ->args([
+                        $factoryRef,
+                        $entry['id'],
+                        $entry['sheet'],
+                        $denormalizer,
+                        service('google_sheets.profiler.collector'),
+                        $name,
+                    ])
+                    ->public()
+                ;
+            } elseif (null !== $cache) {
+                $services
+                    ->set($serviceId, CachedSheetsService::class)
+                    ->args([
+                        $factoryRef,
+                        $entry['id'],
+                        $entry['sheet'],
+                        service($cache['pool']),
+                        $cache['ttl'],
+                        $name,
+                    ])
+                    ->public()
+                ;
+            } else {
+                $services
+                    ->set($serviceId, SheetsService::class)
+                    ->args([
+                        $factoryRef,
+                        $entry['id'],
+                        $entry['sheet'],
+                        $denormalizer,
+                    ])
+                    ->public()
+                ;
+            }
 
             // Autowire by variable name: `SheetsService $allocators` resolves
             // to this concrete instance when `name` is "allocators".
@@ -242,6 +292,33 @@ final class GoogleSheetsBundle extends AbstractBundle
 
         $services->alias(SheetsService::class, 'google_sheets.sheets_service.'.$defaultName)->public();
         $services->alias('google_sheets.sheets_service', 'google_sheets.sheets_service.'.$defaultName)->public();
+
+        // Service locator so the registry can pull `SheetsService` instances by name without
+        // depending on individual service IDs.
+        $locatorMap = [];
+        foreach ($spreadsheets as $name => $_entry) {
+            $locatorMap[$name] = service('google_sheets.sheets_service.'.$name);
+        }
+
+        $services
+            ->set('google_sheets.registry', SheetsRegistry::class)
+            ->args([
+                $spreadsheets,
+                service_locator($locatorMap),
+            ])
+            ->public()
+        ;
+        $services->alias(SheetsRegistry::class, 'google_sheets.registry')->public();
+
+        // Console commands. Tagged manually because AbstractBundle does not
+        // enable autoconfiguration for our namespace.
+        foreach ([ListSpreadsheetsCommand::class, TabsCommand::class, PeekCommand::class, DoctorCommand::class] as $cmd) {
+            $services
+                ->set($cmd)
+                ->args([service('google_sheets.registry')])
+                ->tag('console.command')
+            ;
+        }
     }
 
     /**
@@ -254,7 +331,7 @@ final class GoogleSheetsBundle extends AbstractBundle
      *     0: array{api_key: string|null, client_id: string|null, client_secret: string|null, auth_config: string|array<string, mixed>|null},
      *     1: list<string>,
      *     2: string|null,
-     *     3: array<string, array{id: string, sheet: string|null}>,
+     *     3: array<string, array{id: string, sheet: string|null, cache: array{ttl: int, pool: string}|null}>,
      *     4: string|null,
      * }
      */
@@ -304,7 +381,20 @@ final class GoogleSheetsBundle extends AbstractBundle
             if (null !== $sheet && (!is_string($sheet) || '' === $sheet)) {
                 throw new LogicException(sprintf('google_sheets.spreadsheets["%s"].sheet must be a non-empty string or omitted.', $name));
             }
-            $spreadsheetMap[$name] = ['id' => $entry['id'], 'sheet' => $sheet];
+            $cache = null;
+            $rawCache = $entry['cache'] ?? null;
+            if (is_array($rawCache) && [] !== $rawCache) {
+                $ttl = $rawCache['ttl'] ?? null;
+                if (!is_int($ttl) || $ttl < 1) {
+                    throw new LogicException(sprintf('google_sheets.spreadsheets["%s"].cache.ttl must be a positive integer.', $name));
+                }
+                $pool = $rawCache['pool'] ?? 'cache.app';
+                if (!is_string($pool) || '' === $pool) {
+                    throw new LogicException(sprintf('google_sheets.spreadsheets["%s"].cache.pool must be a non-empty string.', $name));
+                }
+                $cache = ['ttl' => $ttl, 'pool' => $pool];
+            }
+            $spreadsheetMap[$name] = ['id' => $entry['id'], 'sheet' => $sheet, 'cache' => $cache];
         }
 
         $defaultName = $this->stringOrNull($config['default_spreadsheet'] ?? null);

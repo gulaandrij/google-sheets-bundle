@@ -111,6 +111,6 @@ final class TraceableSheetsServiceTest extends TestCase
         $factory = $this->createMock(SheetsClientFactory::class);
         $factory->method('create')->willReturn($client);
 
-        return new TraceableSheetsService($factory, 'SHEET_ID', 'BoundTab', $collector, 'allocators');
+        return new TraceableSheetsService($factory, 'SHEET_ID', 'BoundTab', null, $collector, 'allocators');
     }
 }

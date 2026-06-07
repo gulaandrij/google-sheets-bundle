@@ -10,6 +10,7 @@ use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
+use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 use Throwable;
 
 /**
@@ -23,10 +24,11 @@ final class TraceableSheetsService extends SheetsService
         SheetsClientFactory $factory,
         string $spreadsheetId,
         ?string $boundSheet,
+        ?DenormalizerInterface $denormalizer,
         private readonly SheetsCollector $collector,
         private readonly string $serviceName,
     ) {
-        parent::__construct($factory, $spreadsheetId, $boundSheet);
+        parent::__construct($factory, $spreadsheetId, $boundSheet, $denormalizer);
     }
 
     public function readRaw(
@@ -157,6 +159,7 @@ final class TraceableSheetsService extends SheetsService
      */
     private function trace(string $method, array $context, callable $fn): mixed
     {
+        $origin = $this->captureOrigin();
         $start = microtime(true);
         try {
             $result = $fn();
@@ -167,6 +170,7 @@ final class TraceableSheetsService extends SheetsService
                     'spreadsheet_id' => $this->getSpreadsheetId(),
                     'sheet' => $context['sheet'],
                     'range' => $context['range'] ?? null,
+                    'origin' => $origin,
                 ],
                 (microtime(true) - $start) * 1000.0,
             );
@@ -180,6 +184,7 @@ final class TraceableSheetsService extends SheetsService
                     'spreadsheet_id' => $this->getSpreadsheetId(),
                     'sheet' => $context['sheet'],
                     'range' => $context['range'] ?? null,
+                    'origin' => $origin,
                 ],
                 (microtime(true) - $start) * 1000.0,
                 $e,
@@ -187,5 +192,27 @@ final class TraceableSheetsService extends SheetsService
 
             throw $e;
         }
+    }
+
+    /**
+     * Walk the stack until the first frame outside the bundle's namespace —
+     * that's the call site the user actually wants to see in the profiler.
+     */
+    private function captureOrigin(): ?string
+    {
+        $frames = debug_backtrace(\DEBUG_BACKTRACE_IGNORE_ARGS, 8);
+        foreach ($frames as $frame) {
+            $class = $frame['class'] ?? '';
+            if ('' !== $class && str_starts_with($class, 'Gulaandrij\\GoogleSheetsBundle\\')) {
+                continue;
+            }
+            if (!isset($frame['file'], $frame['line'])) {
+                continue;
+            }
+
+            return sprintf('%s:%d', $frame['file'], $frame['line']);
+        }
+
+        return null;
     }
 }

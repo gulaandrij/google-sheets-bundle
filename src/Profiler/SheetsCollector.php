@@ -19,6 +19,7 @@ use Throwable;
  *     spreadsheet_id: string,
  *     sheet: string|null,
  *     range: string|null,
+ *     origin: string|null,
  *     duration_ms: float,
  *     error: string|null,
  * }
@@ -35,6 +36,7 @@ final class SheetsCollector extends AbstractDataCollector
      *     spreadsheet_id: string,
      *     sheet: string|null,
      *     range?: string|null,
+     *     origin?: string|null,
      * } $context
      */
     public function record(
@@ -52,6 +54,7 @@ final class SheetsCollector extends AbstractDataCollector
             'spreadsheet_id' => $context['spreadsheet_id'],
             'sheet' => $context['sheet'] ?? null,
             'range' => $context['range'] ?? null,
+            'origin' => $context['origin'] ?? null,
             'duration_ms' => $durationMs,
             'error' => null !== $error ? $error::class.': '.$error->getMessage() : null,
         ];

@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-06-07
+
+DX-focused release: introspection commands, typed reads, streaming, opt-in caching, profiler enhancements, in-memory test fake.
+
+### Added
+- **Console commands** for introspection and debugging:
+  - `google-sheets:list` — print every configured binding (name, ID, bound tab).
+  - `google-sheets:tabs <binding>` — list every tab in the bound spreadsheet (uses `listSheetsWithIds`).
+  - `google-sheets:peek <binding> [sheet] [--rows=N] [--range=A1:Z…]` — dump the first N rows as a Symfony table; useful for sanity-checking auth + connectivity.
+  - `google-sheets:doctor` — probe every binding, report `OK / BOUND-SHEET-MISSING / FAIL` per row with timing. Catches misconfig at deploy time instead of at first call.
+- **`SheetsRegistry`** service (`google_sheets.registry`, public, autowire alias) — read-only directory of every named binding plus a ServiceLocator that resolves each binding's `SheetsService` by name.
+- **`SheetsService::readEntities(string $className): list<T>`** — denormalizes rows directly into typed DTOs via the Symfony Serializer. The new **`#[SheetColumn('Header Name')]`** attribute on DTO properties maps spreadsheet headers to property names so DTOs can stay PHP-idiomatic. Auto-wired when `framework.serializer` is enabled; throws a clear `LogicException` otherwise.
+- **`SheetsService::readAssocIterable(?string $sheetName = null, int $batchSize = 500): \Generator`** — streams assoc rows in fixed-size batches via column-letter pagination, avoiding the OOM that comes with loading a 100k-row sheet all at once.
+- **`CachedSheetsService`** decorator with per-binding `cache: { ttl: <seconds>, pool: <service id> }` config. Read methods are memoised through the configured Symfony cache pool (default `cache.app`); writes go through unchanged. Tracing wins over caching in dev (`kernel.debug=true`) — the profiler should show real Sheets calls.
+- **`Gulaandrij\GoogleSheetsBundle\Test\InMemorySheetsService`** — `final` drop-in for `SheetsService` backed by an in-memory map. Use in functional tests via `self::getContainer()->set('google_sheets.sheets_service.<binding>', new InMemorySheetsService([...]))` to skip Google entirely.
+- **Profiler enhancements**:
+  - Calls are now grouped by service binding in the panel (collapsible per-binding sections with sub-totals).
+  - Each call captures and shows the **caller origin** (first stack frame outside the bundle) so you can jump straight to the file that triggered each Sheets call.
+- Class constants `SheetsService::VALUE_INPUT_*` / `INSERT_DATA_*` for the corresponding option arguments (alongside the existing render-option / major-dimension constants).
+- `symfony/serializer`, `symfony/cache`, and `symfony/property-access` listed under `suggest` so users discover the relevant install commands.
+
+### Changed
+- `SheetsService` is no longer `final`; both `CachedSheetsService` and `InMemorySheetsService` extend it. Subclasses remain a documented bundle internal — application code should keep injecting the concrete `SheetsService` type (alias resolution picks the right decorator).
+- `SheetsService::__construct` now accepts an optional `?DenormalizerInterface` as the 4th argument (auto-injected by the bundle); the existing 3-arg form continues to work.
+- Internal `readAssoc` → `doReadRaw` and `firstRow` → `doFirstRow` helpers were already in place from 1.1.0 to keep tracing single-record; the streaming reader now uses `doFirstRow` + `doReadRaw` too so a single batch yields exactly one trace entry.
+
 ## [1.1.1] — 2026-06-07
 
 ### Fixed
@@ -56,7 +82,8 @@ First stable release. Locks the public API; any further breaking change will bum
 - Autowire-friendly aliases for `SheetsService`, `SheetsClient`, `Google\Service\Sheets`, and `Google\Client`.
 - PHPUnit, PHPStan (level 8), PHP-CS-Fixer, and GitHub Actions CI matrix (PHP 8.3/8.4 × Symfony 6.4/7.x).
 
-[Unreleased]: https://github.com/gulaandrij/google-sheets-bundle/compare/1.1.1...HEAD
+[Unreleased]: https://github.com/gulaandrij/google-sheets-bundle/compare/1.2.0...HEAD
+[1.2.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.2.0
 [1.1.1]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.1.1
 [1.1.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.1.0
 [1.0.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.0.0
