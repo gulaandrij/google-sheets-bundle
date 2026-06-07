@@ -3,7 +3,7 @@
 {% block toolbar %}
     {% set status_color = collector.errorCount > 0 ? 'red' : '' %}
     {% set icon %}
-        {{ source('@WebProfiler/Icon/email.svg', ignore_missing = true) }}
+        {{ source('@GoogleSheets/Icon/sheets.svg') }}
         <span class="sf-toolbar-value">{{ collector.totalCalls }}</span>
         <span class="sf-toolbar-info-piece-additional-detail">
             <span class="sf-toolbar-label">in</span>
@@ -34,7 +34,7 @@
 
 {% block menu %}
     <span class="label {{ collector.errorCount > 0 ? 'label-status-error' : '' }} {{ collector.totalCalls == 0 ? 'disabled' : '' }}">
-        <span class="icon">{{ source('@WebProfiler/Icon/email.svg', ignore_missing = true) }}</span>
+        <span class="icon">{{ source('@GoogleSheets/Icon/sheets.svg') }}</span>
         <strong>Google Sheets</strong>
         {% if collector.totalCalls > 0 %}
             <span class="count">

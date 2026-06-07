@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-06-07
+
+### Fixed
+- Profiler toolbar item and menu now use a dedicated Google-Sheets-style SVG icon (`@GoogleSheets/Icon/sheets.svg`) instead of the WebProfiler email-icon placeholder.
+
 ## [1.1.0] — 2026-06-07
 
 ### Added
@@ -51,7 +56,8 @@ First stable release. Locks the public API; any further breaking change will bum
 - Autowire-friendly aliases for `SheetsService`, `SheetsClient`, `Google\Service\Sheets`, and `Google\Client`.
 - PHPUnit, PHPStan (level 8), PHP-CS-Fixer, and GitHub Actions CI matrix (PHP 8.3/8.4 × Symfony 6.4/7.x).
 
-[Unreleased]: https://github.com/gulaandrij/google-sheets-bundle/compare/1.1.0...HEAD
+[Unreleased]: https://github.com/gulaandrij/google-sheets-bundle/compare/1.1.1...HEAD
+[1.1.1]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.1.1
 [1.1.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.1.0
 [1.0.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/1.0.0
 [0.1.0]: https://github.com/gulaandrij/google-sheets-bundle/releases/tag/0.1.0
