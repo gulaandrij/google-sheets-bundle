@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Gulaandrij\GoogleSheetsBundle\Profiler;
 
+use Generator;
 use Google\Service\Sheets\AppendValuesResponse;
 use Google\Service\Sheets\BatchUpdateSpreadsheetResponse;
 use Google\Service\Sheets\BatchUpdateValuesResponse;
@@ -87,7 +88,7 @@ final class TraceableSheetsService extends SheetsService
     public function readAssocIterable(
         ?string $sheetName = null,
         int $batchSize = 500,
-    ): \Generator {
+    ): Generator {
         // Generators don't compose cleanly with trace() because the work
         // happens lazily as the caller pulls. Time the whole stream up to
         // exhaustion and emit one trace entry on completion.
@@ -268,8 +269,7 @@ final class TraceableSheetsService extends SheetsService
      */
     private function captureOrigin(): ?string
     {
-        $frames = debug_backtrace(\DEBUG_BACKTRACE_IGNORE_ARGS, 12);
-        foreach ($frames as $frame) {
+        foreach (debug_backtrace(\DEBUG_BACKTRACE_IGNORE_ARGS, 12) as $frame) {
             $class = $frame['class'] ?? '';
             if (self::isBundleRuntimeClass($class)) {
                 continue;

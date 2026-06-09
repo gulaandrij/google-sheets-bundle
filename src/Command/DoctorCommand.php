@@ -60,9 +60,7 @@ final class DoctorCommand extends Command
             try {
                 $tabs = $service->listSheetsWithIds();
                 $boundSheet = $meta['sheet'];
-                $boundOk = null === $boundSheet || in_array($boundSheet, $tabs, true);
-
-                if ($boundOk) {
+                if (null === $boundSheet || in_array($boundSheet, $tabs, true)) {
                     $status = '<info>OK</info>';
                     $detail = sprintf('%d tab(s) reachable', count($tabs));
                 } else {

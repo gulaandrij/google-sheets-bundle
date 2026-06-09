@@ -75,7 +75,7 @@ final class InMemorySheetsService extends SheetsService
             new Drive($googleClient),
         );
 
-        parent::__construct($factory, $spreadsheetId, $boundSheet, null);
+        parent::__construct($factory, $spreadsheetId, $boundSheet);
 
         $this->sheets = $sheets;
         $this->sheetIds = $sheetIds;
@@ -177,9 +177,7 @@ final class InMemorySheetsService extends SheetsService
 
     public function readAssocIterable(?string $sheetName = null, int $batchSize = 500): Generator
     {
-        foreach ($this->readAssoc($sheetName) as $row) {
-            yield $row;
-        }
+        yield from $this->readAssoc($sheetName);
     }
 
     public function listSheets(): array

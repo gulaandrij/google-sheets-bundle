@@ -77,8 +77,7 @@ final class PeekCommand extends Command
         // (or whole-sheet) read gets the auto-header behaviour. The
         // --with-header flag opts back in when the range happens to include
         // the real header row.
-        $stripHeader = null === $rangeStr || true === $input->getOption('with-header');
-        if ($stripHeader) {
+        if (null === $rangeStr || true === $input->getOption('with-header')) {
             $header = array_map(
                 static fn (mixed $v): string => is_scalar($v) ? (string) $v : '?',
                 $rows[0],

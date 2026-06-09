@@ -615,9 +615,9 @@ class SheetsService
             $extra = array_values(array_diff($rowKeys, $firstKeys));
             $missing = array_values(array_diff(array_keys($firstKeysFlipped), $rowKeys));
             /** @var list<string> $extraStrings */
-            $extraStrings = array_map(static fn (int|string $k): string => (string) $k, $extra);
+            $extraStrings = array_map('strval', $extra);
             /** @var list<string> $missingStrings */
-            $missingStrings = array_map(static fn (int|string $k): string => (string) $k, $missing);
+            $missingStrings = array_map('strval', $missing);
             throw MixedRowShapeException::divergentAssocKeys($index, $extraStrings, $missingStrings);
         }
     }
@@ -671,8 +671,7 @@ class SheetsService
         }
 
         $map = [];
-        $reflection = new ReflectionClass($className);
-        foreach ($reflection->getProperties() as $property) {
+        foreach ((new ReflectionClass($className))->getProperties() as $property) {
             foreach ($property->getAttributes(SheetColumn::class) as $attribute) {
                 /** @var SheetColumn $instance */
                 $instance = $attribute->newInstance();
