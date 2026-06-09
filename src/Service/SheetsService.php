@@ -11,12 +11,14 @@ use Google\Service\Sheets\BatchUpdateSpreadsheetResponse;
 use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
 use Gulaandrij\GoogleSheetsBundle\Attribute\SheetColumn;
+use Gulaandrij\GoogleSheetsBundle\Event\SheetsWriteEvent;
 use Gulaandrij\GoogleSheetsBundle\Exception\DuplicateHeaderException;
 use Gulaandrij\GoogleSheetsBundle\Exception\InvalidHeaderException;
 use Gulaandrij\GoogleSheetsBundle\Exception\MissingSheetNameException;
 use Gulaandrij\GoogleSheetsBundle\Exception\MixedRowShapeException;
 use InvalidArgumentException;
 use LogicException;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use ReflectionClass;
 use Revolution\Google\Sheets\SheetsClient;
 use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
@@ -40,7 +42,7 @@ use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
  * For dynamic spreadsheet IDs (only known at runtime), inject
  * `SheetsClientFactory` instead and drive the client directly.
  */
-class SheetsService
+class SheetsService implements SheetsServiceInterface
 {
     public const VALUE_RENDER_FORMATTED = 'FORMATTED_VALUE';
     public const VALUE_RENDER_UNFORMATTED = 'UNFORMATTED_VALUE';
@@ -63,6 +65,7 @@ class SheetsService
         private readonly string $spreadsheetId,
         private readonly ?string $boundSheet = null,
         private readonly ?DenormalizerInterface $denormalizer = null,
+        private readonly ?EventDispatcherInterface $eventDispatcher = null,
     ) {
     }
 
@@ -348,10 +351,15 @@ class SheetsService
     ): AppendValuesResponse {
         $this->assertHomogeneousRows($rows);
 
-        return $this->factory->create()
+        $sheet = $this->resolveSheetName($sheetName);
+        $response = $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
-            ->sheet($this->resolveSheetName($sheetName))
+            ->sheet($sheet)
             ->append($rows, $valueInputOption, $insertDataOption);
+
+        $this->dispatchWrite(SheetsWriteEvent::OP_APPEND, $sheet, null, count($rows));
+
+        return $response;
     }
 
     /**
@@ -365,11 +373,16 @@ class SheetsService
         ?string $sheetName = null,
         string $valueInputOption = self::VALUE_INPUT_RAW,
     ): BatchUpdateValuesResponse {
-        return $this->factory->create()
+        $sheet = $this->resolveSheetName($sheetName);
+        $response = $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
-            ->sheet($this->resolveSheetName($sheetName))
+            ->sheet($sheet)
             ->range($range)
             ->update($values, $valueInputOption);
+
+        $this->dispatchWrite(SheetsWriteEvent::OP_UPDATE, $sheet, $range, count($values));
+
+        return $response;
     }
 
     /**
@@ -377,15 +390,20 @@ class SheetsService
      */
     public function clear(?string $sheetName = null, ?string $range = null): ?ClearValuesResponse
     {
+        $sheet = $this->resolveSheetName($sheetName);
         $selection = $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
-            ->sheet($this->resolveSheetName($sheetName));
+            ->sheet($sheet);
 
         if (null !== $range) {
             $selection = $selection->range($range);
         }
 
-        return $selection->clear();
+        $response = $selection->clear();
+
+        $this->dispatchWrite(SheetsWriteEvent::OP_CLEAR, $sheet, $range);
+
+        return $response;
     }
 
     // ------------------------------------------------------------------
@@ -397,9 +415,13 @@ class SheetsService
      */
     public function addSheet(string $title): BatchUpdateSpreadsheetResponse
     {
-        return $this->factory->create()
+        $response = $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
             ->addSheet($title);
+
+        $this->dispatchWrite(SheetsWriteEvent::OP_ADD_SHEET, $title);
+
+        return $response;
     }
 
     /**
@@ -407,9 +429,13 @@ class SheetsService
      */
     public function deleteSheet(string $title): BatchUpdateSpreadsheetResponse
     {
-        return $this->factory->create()
+        $response = $this->factory->create()
             ->spreadsheet($this->spreadsheetId)
             ->deleteSheet($title);
+
+        $this->dispatchWrite(SheetsWriteEvent::OP_DELETE_SHEET, $title);
+
+        return $response;
     }
 
     // ------------------------------------------------------------------
@@ -511,6 +537,24 @@ class SheetsService
     // ------------------------------------------------------------------
     // Internals
     // ------------------------------------------------------------------
+
+    /**
+     * @param SheetsWriteEvent::OP_* $operation
+     */
+    protected function dispatchWrite(
+        string $operation,
+        ?string $sheetName,
+        ?string $range = null,
+        ?int $rowCount = null,
+    ): void {
+        $this->eventDispatcher?->dispatch(new SheetsWriteEvent(
+            $operation,
+            $this->spreadsheetId,
+            $sheetName,
+            $range,
+            $rowCount,
+        ));
+    }
 
     /**
      * @throws MissingSheetNameException

@@ -48,21 +48,30 @@ final class SheetsRegistry
     public function metadata(string $name): array
     {
         if (!isset($this->spreadsheets[$name])) {
-            throw new InvalidArgumentException(sprintf('No spreadsheet named "%s" is configured. Declared: %s', $name, [] === $this->names() ? '(none)' : implode(', ', $this->names())));
+            throw new InvalidArgumentException($this->notFoundMessage($name));
         }
 
         return $this->spreadsheets[$name];
     }
 
-    public function service(string $name): SheetsService
+    public function service(string $name): SheetsServiceInterface
     {
         if (!$this->has($name)) {
-            throw new InvalidArgumentException(sprintf('No spreadsheet named "%s" is configured. Declared: %s', $name, [] === $this->names() ? '(none)' : implode(', ', $this->names())));
+            throw new InvalidArgumentException($this->notFoundMessage($name));
         }
 
-        /** @var SheetsService $service */
+        /** @var SheetsServiceInterface $service */
         $service = $this->services->get($name);
 
         return $service;
+    }
+
+    private function notFoundMessage(string $name): string
+    {
+        return sprintf(
+            'No spreadsheet named "%s" is configured. Declared: %s',
+            $name,
+            [] === $this->names() ? '(none)' : implode(', ', $this->names()),
+        );
     }
 }

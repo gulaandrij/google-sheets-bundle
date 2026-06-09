@@ -125,7 +125,7 @@ final class TraceableSheetsServiceTest extends TestCase
         $client->method('range')->willReturnSelf();
         $client->method('first')->willReturn(['Name', 'Email']);
         $callCount = 0;
-        $client->method('all')->willReturnCallback(function () use (&$callCount): array {
+        $client->method('all')->willReturnCallback(static function () use (&$callCount): array {
             ++$callCount;
             if (1 === $callCount) {
                 return [['Alice', 'a@x'], ['Bob', 'b@x']];

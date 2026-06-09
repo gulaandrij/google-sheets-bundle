@@ -15,6 +15,7 @@ use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
 use Gulaandrij\GoogleSheetsBundle\Tests\Fixtures\TestKernel;
+use LogicException;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
@@ -304,7 +305,7 @@ final class GoogleSheetsBundleTest extends TestCase
 
     public function testInvalidCachePoolReferenceFailsAtBootWithBundleScopedError(): void
     {
-        $this->expectException(\LogicException::class);
+        $this->expectException(LogicException::class);
         $this->expectExceptionMessageMatches('/cache\.pool refers to service "missing\.pool"/');
 
         $this->bootKernel(

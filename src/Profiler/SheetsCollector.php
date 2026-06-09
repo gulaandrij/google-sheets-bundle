@@ -60,7 +60,6 @@ final class SheetsCollector extends AbstractDataCollector
         ];
         $this->data['calls'] = $calls;
         $this->data['total_calls'] = $this->getTotalCalls() + 1;
-        $this->data['total_duration_ms'] = $this->getTotalDurationMs() + $durationMs;
         if (null !== $error) {
             $this->data['error_count'] = $this->getErrorCount() + 1;
         }
@@ -76,7 +75,6 @@ final class SheetsCollector extends AbstractDataCollector
         $this->data = [
             'calls' => [],
             'total_calls' => 0,
-            'total_duration_ms' => 0.0,
             'error_count' => 0,
         ];
     }
@@ -100,9 +98,12 @@ final class SheetsCollector extends AbstractDataCollector
 
     public function getTotalDurationMs(): float
     {
-        $value = $this->data['total_duration_ms'] ?? 0.0;
+        $total = 0.0;
+        foreach ($this->getCalls() as $call) {
+            $total += $call['duration_ms'];
+        }
 
-        return is_float($value) ? $value : (is_int($value) ? (float) $value : 0.0);
+        return $total;
     }
 
     public function getErrorCount(): int

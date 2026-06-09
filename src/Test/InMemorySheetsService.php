@@ -12,12 +12,15 @@ use Google\Service\Sheets as GoogleSheets;
 use Google\Service\Sheets\BatchUpdateSpreadsheetResponse;
 use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
+use Gulaandrij\GoogleSheetsBundle\Event\SheetsWriteEvent;
 use Gulaandrij\GoogleSheetsBundle\Exception\DuplicateHeaderException;
 use Gulaandrij\GoogleSheetsBundle\Exception\InvalidHeaderException;
 use Gulaandrij\GoogleSheetsBundle\Exception\MissingSheetNameException;
+use Gulaandrij\GoogleSheetsBundle\Exception\MixedRowShapeException;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
 use LogicException;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Revolution\Google\Sheets\SheetsClient;
 
 /**
@@ -64,6 +67,7 @@ final class InMemorySheetsService extends SheetsService
         string $spreadsheetId = 'in-memory',
         ?string $boundSheet = null,
         array $sheetIds = [],
+        ?EventDispatcherInterface $eventDispatcher = null,
     ) {
         // Build a real SheetsClientFactory pointing at fresh, un-authenticated
         // Google services. None of the overridden methods reach into it — the
@@ -75,7 +79,7 @@ final class InMemorySheetsService extends SheetsService
             new Drive($googleClient),
         );
 
-        parent::__construct($factory, $spreadsheetId, $boundSheet);
+        parent::__construct($factory, $spreadsheetId, $boundSheet, null, $eventDispatcher);
 
         $this->sheets = $sheets;
         $this->sheetIds = $sheetIds;
@@ -211,6 +215,10 @@ final class InMemorySheetsService extends SheetsService
         string $valueInputOption = self::VALUE_INPUT_RAW,
         string $insertDataOption = self::INSERT_DATA_OVERWRITE,
     ): AppendValuesResponse {
+        // Mirror the real service's shape check so tests don't pass with mixed
+        // rows that would throw MixedRowShapeException in production.
+        $this->assertSameShape($rows);
+
         $name = $this->resolveSheet($sheetName);
         $existing = $this->sheets[$name] ?? [];
 
@@ -229,7 +237,48 @@ final class InMemorySheetsService extends SheetsService
 
         $this->sheets[$name] = $existing;
 
+        $this->dispatchWrite(SheetsWriteEvent::OP_APPEND, $name, null, count($rows));
+
         return new AppendValuesResponse();
+    }
+
+    /**
+     * @param list<array<string, mixed>>|list<list<mixed>> $rows
+     *
+     * @throws MixedRowShapeException
+     */
+    private function assertSameShape(array $rows): void
+    {
+        if ([] === $rows) {
+            return;
+        }
+
+        $firstIsAssoc = $this->isAssocRow($rows[0]);
+        foreach ($rows as $index => $row) {
+            if ($this->isAssocRow($row) !== $firstIsAssoc) {
+                throw MixedRowShapeException::atIndex($index, $firstIsAssoc);
+            }
+        }
+
+        if (!$firstIsAssoc) {
+            return;
+        }
+
+        /** @var array<string, mixed> $firstRow */
+        $firstRow = $rows[0];
+        $firstKeys = array_keys($firstRow);
+        foreach ($rows as $index => $row) {
+            if (0 === $index) {
+                continue;
+            }
+            $rowKeys = array_keys($row);
+            if ($rowKeys === $firstKeys) {
+                continue;
+            }
+            $extra = array_map('strval', array_values(array_diff($rowKeys, $firstKeys)));
+            $missing = array_map('strval', array_values(array_diff($firstKeys, $rowKeys)));
+            throw MixedRowShapeException::divergentAssocKeys($index, $extra, $missing);
+        }
     }
 
     public function update(
@@ -243,13 +292,19 @@ final class InMemorySheetsService extends SheetsService
         $name = $this->resolveSheet($sheetName);
         $this->sheets[$name] = $values;
 
+        $this->dispatchWrite(SheetsWriteEvent::OP_UPDATE, $name, $range, count($values));
+
         return new BatchUpdateValuesResponse();
     }
 
     public function clear(?string $sheetName = null, ?string $range = null): ClearValuesResponse
     {
+        // Covariant narrowing of the parent's ?ClearValuesResponse — the fake
+        // always succeeds, so it can return a concrete response.
         $name = $this->resolveSheet($sheetName);
         $this->sheets[$name] = [];
+
+        $this->dispatchWrite(SheetsWriteEvent::OP_CLEAR, $name, $range);
 
         return new ClearValuesResponse();
     }
@@ -258,12 +313,16 @@ final class InMemorySheetsService extends SheetsService
     {
         $this->sheets[$title] ??= [];
 
+        $this->dispatchWrite(SheetsWriteEvent::OP_ADD_SHEET, $title);
+
         return new BatchUpdateSpreadsheetResponse();
     }
 
     public function deleteSheet(string $title): BatchUpdateSpreadsheetResponse
     {
         unset($this->sheets[$title]);
+
+        $this->dispatchWrite(SheetsWriteEvent::OP_DELETE_SHEET, $title);
 
         return new BatchUpdateSpreadsheetResponse();
     }

@@ -8,6 +8,7 @@ use Google\Service\Sheets\AppendValuesResponse;
 use Google\Service\Sheets\BatchUpdateSpreadsheetResponse;
 use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 use Symfony\Contracts\Cache\CacheInterface;
 use Symfony\Contracts\Cache\ItemInterface;
@@ -22,9 +23,9 @@ use Symfony\Contracts\Cache\ItemInterface;
 final class CachedSheetsService extends SheetsService
 {
     /**
-     * @var array<string, true>  Cache keys this instance has populated — used
-     *                           to drop reads when the same service writes,
-     *                           without depending on a tag-aware cache pool.
+     * @var array<string, true> cache keys this instance has populated — used
+     *                          to drop reads when the same service writes,
+     *                          without depending on a tag-aware cache pool
      */
     private array $populatedKeys = [];
 
@@ -36,8 +37,9 @@ final class CachedSheetsService extends SheetsService
         private readonly int $ttlSeconds,
         private readonly string $serviceName,
         ?DenormalizerInterface $denormalizer = null,
+        ?EventDispatcherInterface $eventDispatcher = null,
     ) {
-        parent::__construct($factory, $spreadsheetId, $boundSheet, $denormalizer);
+        parent::__construct($factory, $spreadsheetId, $boundSheet, $denormalizer, $eventDispatcher);
     }
 
     public function readRaw(

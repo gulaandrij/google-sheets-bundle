@@ -85,10 +85,14 @@ final class PeekCommand extends Command
             $body = array_slice($rows, 1, $rowsLimit);
         } else {
             $columnCount = count($rows[0]);
-            $header = array_map(
-                static fn (int $i): string => self::columnLetter($i + 1),
-                range(0, $columnCount - 1),
-            );
+            // range(0, -1) returns [0] in PHP — would emit a phantom 'A'
+            // column for a leading empty row.
+            $header = 0 === $columnCount
+                ? []
+                : array_map(
+                    static fn (int $i): string => self::columnLetter($i + 1),
+                    range(0, $columnCount - 1),
+                );
             $body = array_slice($rows, 0, $rowsLimit);
         }
         $stringify = static function (mixed $v): string {
@@ -128,7 +132,7 @@ final class PeekCommand extends Command
     {
         $letters = '';
         while ($columnIndex > 0) {
-            $columnIndex--;
+            --$columnIndex;
             $letters = chr(65 + ($columnIndex % 26)).$letters;
             $columnIndex = intdiv($columnIndex, 26);
         }

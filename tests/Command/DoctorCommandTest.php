@@ -51,7 +51,7 @@ final class DoctorCommandTest extends TestCase
 
         $registry = new SheetsRegistry(
             ['allocators' => ['id' => '1abc', 'sheet' => 'Allocator List']],
-            new ServiceLocator(['allocators' => fn () => $service]),
+            new ServiceLocator(['allocators' => static fn () => $service]),
         );
 
         return new DoctorCommand($registry);

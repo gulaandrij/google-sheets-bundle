@@ -11,6 +11,7 @@ use Google\Service\Sheets\BatchUpdateValuesResponse;
 use Google\Service\Sheets\ClearValuesResponse;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 use Throwable;
 
@@ -28,8 +29,9 @@ final class TraceableSheetsService extends SheetsService
         ?DenormalizerInterface $denormalizer,
         private readonly SheetsCollector $collector,
         private readonly string $serviceName,
+        ?EventDispatcherInterface $eventDispatcher = null,
     ) {
-        parent::__construct($factory, $spreadsheetId, $boundSheet, $denormalizer);
+        parent::__construct($factory, $spreadsheetId, $boundSheet, $denormalizer, $eventDispatcher);
     }
 
     public function readRaw(
@@ -90,44 +92,36 @@ final class TraceableSheetsService extends SheetsService
         int $batchSize = 500,
     ): Generator {
         // Generators don't compose cleanly with trace() because the work
-        // happens lazily as the caller pulls. Time the whole stream up to
-        // exhaustion and emit one trace entry on completion.
+        // happens lazily as the caller pulls. Time the whole stream and emit
+        // one trace entry — `finally` covers the early-break case too (PHP
+        // closes the generator silently then, without throwing).
         $origin = $this->captureOrigin();
         $start = microtime(true);
         $count = 0;
+        $error = null;
         try {
             foreach (parent::readAssocIterable($sheetName, $batchSize) as $row) {
                 ++$count;
                 yield $row;
             }
-            $this->recordIterableCompletion($sheetName, $batchSize, $count, $origin, $start);
         } catch (Throwable $e) {
-            $this->recordIterableCompletion($sheetName, $batchSize, $count, $origin, $start, $e);
+            $error = $e;
 
             throw $e;
+        } finally {
+            $this->collector->record(
+                $this->serviceName,
+                sprintf('readAssocIterable(batchSize=%d, yielded=%d)', $batchSize, $count),
+                [
+                    'spreadsheet_id' => $this->getSpreadsheetId(),
+                    'sheet' => $sheetName ?? $this->getBoundSheet(),
+                    'range' => null,
+                    'origin' => $origin,
+                ],
+                (microtime(true) - $start) * 1000.0,
+                $error,
+            );
         }
-    }
-
-    private function recordIterableCompletion(
-        ?string $sheetName,
-        int $batchSize,
-        int $count,
-        ?string $origin,
-        float $start,
-        ?Throwable $error = null,
-    ): void {
-        $this->collector->record(
-            $this->serviceName,
-            sprintf('readAssocIterable(batchSize=%d, yielded=%d)', $batchSize, $count),
-            [
-                'spreadsheet_id' => $this->getSpreadsheetId(),
-                'sheet' => $sheetName ?? $this->getBoundSheet(),
-                'range' => null,
-                'origin' => $origin,
-            ],
-            (microtime(true) - $start) * 1000.0,
-            $error,
-        );
     }
 
     private function shortClassName(string $className): string
@@ -200,6 +194,15 @@ final class TraceableSheetsService extends SheetsService
         return $this->trace('listSheetsWithIds', ['sheet' => null], fn (): array => parent::listSheetsWithIds());
     }
 
+    public function findSheetNameById(int $sheetId): ?string
+    {
+        return $this->trace(
+            sprintf('findSheetNameById(%d)', $sheetId),
+            ['sheet' => null],
+            fn (): ?string => parent::findSheetNameById($sheetId),
+        );
+    }
+
     public function spreadsheetProperties(): object
     {
         return $this->trace('spreadsheetProperties', ['sheet' => null], fn (): object => parent::spreadsheetProperties());
@@ -226,36 +229,26 @@ final class TraceableSheetsService extends SheetsService
     {
         $origin = $this->captureOrigin();
         $start = microtime(true);
+        $error = null;
         try {
-            $result = $fn();
-            $this->collector->record(
-                $this->serviceName,
-                $method,
-                [
-                    'spreadsheet_id' => $this->getSpreadsheetId(),
-                    'sheet' => $context['sheet'],
-                    'range' => $context['range'] ?? null,
-                    'origin' => $origin,
-                ],
-                (microtime(true) - $start) * 1000.0,
-            );
-
-            return $result;
+            return $fn();
         } catch (Throwable $e) {
-            $this->collector->record(
-                $this->serviceName,
-                $method,
-                [
-                    'spreadsheet_id' => $this->getSpreadsheetId(),
-                    'sheet' => $context['sheet'],
-                    'range' => $context['range'] ?? null,
-                    'origin' => $origin,
-                ],
-                (microtime(true) - $start) * 1000.0,
-                $e,
-            );
+            $error = $e;
 
             throw $e;
+        } finally {
+            $this->collector->record(
+                $this->serviceName,
+                $method,
+                [
+                    'spreadsheet_id' => $this->getSpreadsheetId(),
+                    'sheet' => $context['sheet'],
+                    'range' => $context['range'] ?? null,
+                    'origin' => $origin,
+                ],
+                (microtime(true) - $start) * 1000.0,
+                $error,
+            );
         }
     }
 
@@ -269,7 +262,7 @@ final class TraceableSheetsService extends SheetsService
      */
     private function captureOrigin(): ?string
     {
-        foreach (debug_backtrace(\DEBUG_BACKTRACE_IGNORE_ARGS, 12) as $frame) {
+        foreach (debug_backtrace(\DEBUG_BACKTRACE_IGNORE_ARGS, 25) as $frame) {
             $class = $frame['class'] ?? '';
             if (self::isBundleRuntimeClass($class)) {
                 continue;

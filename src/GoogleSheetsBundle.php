@@ -18,6 +18,7 @@ use Gulaandrij\GoogleSheetsBundle\Service\GoogleClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsClientFactory;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsRegistry;
 use Gulaandrij\GoogleSheetsBundle\Service\SheetsService;
+use Gulaandrij\GoogleSheetsBundle\Service\SheetsServiceInterface;
 use LogicException;
 use Revolution\Google\Sheets\SheetsClient;
 use Symfony\Component\Config\Definition\Configurator\DefinitionConfigurator;
@@ -25,6 +26,7 @@ use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigurator;
 use Symfony\Component\HttpKernel\Bundle\AbstractBundle;
 use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
+use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
 use function Symfony\Component\DependencyInjection\Loader\Configurator\service;
 use function Symfony\Component\DependencyInjection\Loader\Configurator\service_locator;
@@ -233,6 +235,7 @@ final class GoogleSheetsBundle extends AbstractBundle
             $serviceId = 'google_sheets.sheets_service.'.$name;
 
             $denormalizer = service(DenormalizerInterface::class)->nullOnInvalid();
+            $eventDispatcher = service(EventDispatcherInterface::class)->nullOnInvalid();
             $factoryRef = service('google_sheets.sheets_client_factory');
             $cache = $entry['cache'];
 
@@ -248,18 +251,13 @@ final class GoogleSheetsBundle extends AbstractBundle
                         $denormalizer,
                         service('google_sheets.profiler.collector'),
                         $name,
+                        $eventDispatcher,
                     ])
                     ->public()
                 ;
             } elseif (null !== $cache) {
                 if (!$builder->has($cache['pool'])) {
-                    throw new LogicException(sprintf(
-                        'google_sheets.spreadsheets["%s"].cache.pool refers to service "%s", which is not registered. '
-                        .'Configure it via framework.cache.pools.%s, or use the default "cache.app" (enabled by FrameworkBundle).',
-                        $name,
-                        $cache['pool'],
-                        $cache['pool'],
-                    ));
+                    throw new LogicException(sprintf('google_sheets.spreadsheets["%s"].cache.pool refers to service "%s", which is not registered. Configure it via framework.cache.pools.%s, or use the default "cache.app" (enabled by FrameworkBundle).', $name, $cache['pool'], $cache['pool']));
                 }
                 $services
                     ->set($serviceId, CachedSheetsService::class)
@@ -271,6 +269,7 @@ final class GoogleSheetsBundle extends AbstractBundle
                         $cache['ttl'],
                         $name,
                         $denormalizer,
+                        $eventDispatcher,
                     ])
                     ->public()
                 ;
@@ -282,15 +281,22 @@ final class GoogleSheetsBundle extends AbstractBundle
                         $entry['id'],
                         $entry['sheet'],
                         $denormalizer,
+                        $eventDispatcher,
                     ])
                     ->public()
                 ;
             }
 
-            // Autowire by variable name: `SheetsService $allocators` resolves
-            // to this concrete instance when `name` is "allocators".
+            // Autowire by variable name: `SheetsService $allocators` and
+            // `SheetsServiceInterface $allocators` both resolve to this concrete
+            // instance when `name` is "allocators".
+            $variableName = self::variableName($name);
             $services
-                ->alias(SheetsService::class.' $'.self::variableName($name), $serviceId)
+                ->alias(SheetsService::class.' $'.$variableName, $serviceId)
+                ->public()
+            ;
+            $services
+                ->alias(SheetsServiceInterface::class.' $'.$variableName, $serviceId)
                 ->public()
             ;
         }
@@ -301,6 +307,7 @@ final class GoogleSheetsBundle extends AbstractBundle
         }
 
         $services->alias(SheetsService::class, 'google_sheets.sheets_service.'.$defaultName)->public();
+        $services->alias(SheetsServiceInterface::class, 'google_sheets.sheets_service.'.$defaultName)->public();
         $services->alias('google_sheets.sheets_service', 'google_sheets.sheets_service.'.$defaultName)->public();
 
         // Service locator so the registry can pull `SheetsService` instances by name without
