@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-06-09
+
+Interface + events release. Consumer code can now type-hint against `SheetsServiceInterface` (the bundle wires the autowire alias next to the existing concrete one), and subscribers can listen for `SheetsWriteEvent` to react to writes. Also bundles a round of correctness fixes on the profiler tracer and the in-memory fake.
+
+### Added
+- **`SheetsServiceInterface`** captures the consumer-facing read/write/discovery/metadata contract. `SheetsService`, `TraceableSheetsService`, `CachedSheetsService`, and `InMemorySheetsService` all implement it. The bundle registers `SheetsServiceInterface $<name>` autowire aliases alongside the existing `SheetsService $<name>` aliases, and `SheetsRegistry::service()` now returns the interface. Escape hatches (`client()`, `driveService()`) intentionally stay on the concrete `SheetsService` only.
+- **`SheetsWriteEvent`** (PSR-14) dispatched after every successful `append`, `update`, `clear`, `addSheet`, and `deleteSheet`. Subscribe with `#[AsEventListener(event: SheetsWriteEvent::class)]` for cache invalidation, audit logging, or sync workflows. The event exposes `operation`, `spreadsheetId`, `sheetName`, `range`, and `rowCount`. Read events are deliberately not dispatched — they would fire on every row of streaming reads.
+- Optional `?EventDispatcherInterface` constructor argument on `SheetsService` (last position), `TraceableSheetsService`, `CachedSheetsService`, and `InMemorySheetsService`. Bundle wires it via `service(EventDispatcherInterface::class)->nullOnInvalid()` so existing apps without `symfony/event-dispatcher` still boot.
+
+### Fixed
+- **`TraceableSheetsService::readAssocIterable` no longer drops the trace on early `break`**. The previous try/catch only recorded on full exhaustion or exception — a caller doing `foreach (...) { if (...) break; }` produced zero profiler entries. Switched to try/finally so the trace fires unconditionally.
+- **`TraceableSheetsService::findSheetNameById` is now wrapped**. The parent's comment anticipated this override ("Call the private helper directly so a TraceableSheetsService subclass doesn't double-record"), but the wrapper was missing — `findSheetNameById` hit the parent silently with zero trace recorded.
+- **`captureOrigin` backtrace depth raised from 12 to 25 frames**. In a real Symfony app, bundle-internal frames + the kernel + middleware can consume the first dozen slots, so `captureOrigin` silently returned `null` for the call-site in most production paths.
+- **`InMemorySheetsService::append()` now enforces the homogeneous-row shape check** that the real `SheetsService` runs. Tests using the fake no longer silently accept mixed positional/assoc rows or assoc rows with divergent keys — they throw `MixedRowShapeException` matching production.
+- **`PeekCommand` guards `range(0, -1)`** so an empty leading row no longer emits a phantom `A` column header. PHP returns `[0]` for `range(0, -1)`, which produced a misleading single-column table for empty range fetches.
+
+### Changed
+- **`TraceableSheetsService::trace()` collapses its duplicated success/catch bodies into a single `finally`** that calls `record()` once with `$error ?? null`. Behaviour identical, half the code.
+- **`SheetsCollector::getTotalDurationMs()` is now lazy** — it sums `calls[*].duration_ms` on demand instead of maintaining a running scalar. The running scalar was vulnerable to type drift after Symfony's profiler serialisation, which the previous defensive `is_float` / `is_int` cast hinted at.
+- **`SheetsRegistry::service()` and `metadata()` share a single `notFoundMessage()` helper** instead of repeating the `sprintf` template.
+
 ## [1.2.1] — 2026-06-07
 
 Review-driven follow-up to 1.2.0. Ten findings addressed — three of them user-visible bugs in the new decorators, the rest cleanup and UX polish. No public API changes.
